@@ -249,38 +249,45 @@ const NSTimeInterval MGLFlushInterval = 180;
 }
 
 - (void)userDefaultsDidChange:(NSNotification *)notification {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self pauseOrResumeMetricsCollectionIfRequired];
-    });
+    [self pauseOrResumeMetricsCollectionIfRequired];
 }
 
 - (void)pauseOrResumeMetricsCollectionIfRequired {
-    UIApplication *application = [UIApplication sharedApplication];
-
-    // Prevent blue status bar when host app has `when in use` permission only and it is not in foreground
-    if ([CLLocationManager authorizationStatus] == kCLAuthorizationStatusAuthorizedWhenInUse &&
-        application.applicationState == UIApplicationStateBackground) {
-
-        if (_backgroundTaskIdentifier == UIBackgroundTaskInvalid) {
-            _backgroundTaskIdentifier = [application beginBackgroundTaskWithExpirationHandler:^{
-                [application endBackgroundTask:_backgroundTaskIdentifier];
-                _backgroundTaskIdentifier = UIBackgroundTaskInvalid;
-            }];
-            [self flush];
-        }
-
-        [self pauseMetricsCollection];
-        return;
-    }
-
-    // Toggle pause based on current pause state, user opt-out state, and low-power state.
-    BOOL enabled = [[self class] isEnabled];
-    if (self.paused && enabled) {
-        [self resumeMetricsCollection];
-    } else if (!self.paused && !enabled) {
-        [self flush];
-        [self pauseMetricsCollection];
-    }
+    
+    // [CLLocationManager authorizationStatus] has been found to block in some cases so
+    // dispatch the call to a non-UI thread
+    dispatch_async(self.serialQueue, ^{
+        CLAuthorizationStatus status = [CLLocationManager authorizationStatus];
+        
+        // Checking application state must be done on the main thread for safety and
+        // to avoid a thread sanitizer error
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIApplication *application = [UIApplication sharedApplication];
+            UIApplicationState state = application.applicationState;
+            
+            // Prevent blue status bar when host app has `when in use` permission only and it is not in foreground
+            if (status == kCLAuthorizationStatusAuthorizedWhenInUse && state == UIApplicationStateBackground) {
+                if (_backgroundTaskIdentifier == UIBackgroundTaskInvalid) {
+                    _backgroundTaskIdentifier = [application beginBackgroundTaskWithExpirationHandler:^{
+                        [application endBackgroundTask:_backgroundTaskIdentifier];
+                        _backgroundTaskIdentifier = UIBackgroundTaskInvalid;
+                    }];
+                    [self flush];
+                }
+                [self pauseMetricsCollection];
+                return;
+            }
+            
+            // Toggle pause based on current pause state, user opt-out state, and low-power state.
+            BOOL enabled = [[self class] isEnabled];
+            if (self.paused && enabled) {
+                [self resumeMetricsCollection];
+            } else if (!self.paused && !enabled) {
+                [self flush];
+                [self pauseMetricsCollection];
+            }
+        });
+    });
 }
 
 - (void)pauseMetricsCollection {
