@@ -1,11 +1,11 @@
 #include <mbgl/test/util.hpp>
 #include <mbgl/test/stub_file_source.hpp>
+#include <mbgl/test/stub_map_observer.hpp>
+#include <mbgl/test/map_adapter.hpp>
 
-#include <mbgl/map/map.hpp>
-#include <mbgl/gl/headless_frontend.hpp>
-#include <mbgl/storage/default_file_source.hpp>
+#include <mbgl/map/map_options.hpp>
+#include <mbgl/gfx/headless_frontend.hpp>
 #include <mbgl/style/style.hpp>
-#include <mbgl/util/default_thread_pool.hpp>
 #include <mbgl/util/image.hpp>
 #include <mbgl/util/io.hpp>
 #include <mbgl/util/run_loop.hpp>
@@ -17,34 +17,38 @@
 using namespace mbgl;
 using namespace mbgl::style;
 using namespace std::literals::string_literals;
+using namespace std::chrono_literals;
 
 TEST(Map, PrefetchTiles) {
     util::RunLoop runLoop;
-    ThreadPool threadPool(4);
-    StubFileSource fileSource;
-    HeadlessFrontend frontend { { 512, 512 }, 1, fileSource, threadPool };
-    Map map(frontend, MapObserver::nullObserver(), frontend.getSize(), 1, fileSource, threadPool, MapMode::Static);
+    std::shared_ptr<StubFileSource> fileSource = std::make_shared<StubFileSource>();
+
+    util::Timer emergencyShutoff;
+    emergencyShutoff.start(10s, 0s, [&] {
+        runLoop.stop();
+        FAIL() << "Did not stop rendering";
+    });
+
+    StubMapObserver observer;
+    observer.didFinishLoadingMapCallback = [&] () {
+        runLoop.stop();
+    };
+
+    HeadlessFrontend frontend { { 512, 512 }, 1 };
+    MapAdapter map(frontend, observer, fileSource,
+                MapOptions().withMapMode(MapMode::Continuous).withSize(frontend.getSize()));
 
     std::vector<int> tiles;
 
-    fileSource.response = [&] (const Resource& res) -> optional<Response> {
-        Response response;
+    fileSource->response = [&] (const Resource& res) -> optional<Response> {
+        static std::string tile = util::read_file("test/fixtures/map/prefetch/tile.png");
 
         auto zoom = std::stoi(res.url);
         tiles.push_back(zoom);
 
-        // Return a red tile for prefetched tiles or green to the actual tile.
-        // The end rendering result should be all green because the map is only
-        // considered fully rendered when only ideal tiles are shown.
-        if (zoom == int(map.getZoom()) + 1) {
-            response.data = std::make_shared<std::string>(
-                util::read_file("test/fixtures/map/prefetch/tile_green.png"));
-        } else {
-            response.data = std::make_shared<std::string>(
-                util::read_file("test/fixtures/map/prefetch/tile_red.png"));
-        }
-
-        return { std::move(response) };
+        Response response;
+        response.data = std::make_shared<std::string>(tile);
+        return response;
     };
 
     auto checkTilesForZoom = [&](int zoom, const std::vector<int>& expected) {
@@ -53,14 +57,11 @@ TEST(Map, PrefetchTiles) {
         // Force tile reloading.
         map.getStyle().loadJSON(util::read_file("test/fixtures/map/prefetch/empty.json"));
         map.getStyle().loadJSON(util::read_file("test/fixtures/map/prefetch/style.json"));
+        map.jumpTo(CameraOptions().withCenter(LatLng { 40.726989, -73.992857 }).withZoom(zoom)); // Manhattan
+        runLoop.run();
 
-        map.setLatLngZoom({ 40.726989, -73.992857 }, zoom); // Manhattan
-
-        // Should always render the ideal tiles (i.e. a green map)
-        test::checkImage("test/fixtures/map/prefetch", frontend.render(map));
-
+        ASSERT_EQ(tiles.size(), expected.size());
         ASSERT_TRUE(std::is_permutation(tiles.begin(), tiles.end(), expected.begin()));
-        ASSERT_FALSE(tiles.empty());
     };
 
     // Check defaults, should be 4.

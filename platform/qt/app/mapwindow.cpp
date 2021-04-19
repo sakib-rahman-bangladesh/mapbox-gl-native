@@ -9,17 +9,19 @@
 #include <QMouseEvent>
 #include <QString>
 
-#if QT_VERSION >= 0x050000
-#include <QWindow>
-#endif
-
 int kAnimationDuration = 10000;
-
 
 MapWindow::MapWindow(const QMapboxGLSettings &settings)
     : m_settings(settings)
 {
     setWindowIcon(QIcon(":icon.png"));
+}
+
+MapWindow::~MapWindow()
+{
+    // Make sure we have a valid context so we
+    // can delete the QMapboxGL.
+    makeCurrent();
 }
 
 void MapWindow::selfTest()
@@ -38,13 +40,7 @@ void MapWindow::selfTest()
 }
 
 qreal MapWindow::pixelRatio() {
-#if QT_VERSION >= 0x050600
     return devicePixelRatioF();
-#elif QT_VERSION >= 0x050000
-    return devicePixelRatio();
-#else
-    return 1;
-#endif
 }
 
 
@@ -222,7 +218,21 @@ void MapWindow::keyPressEvent(QKeyEvent *ev)
 
             m_map->setFilter("3d-buildings", buildingsFilterExpression);
 
-            m_map->setPaintProperty("3d-buildings", "fill-extrusion-color", "#aaa");
+            QString fillExtrusionColorJSON = R"JSON(
+              [
+                "interpolate",
+                ["linear"],
+                ["get", "height"],
+                  0.0, "blue",
+                 20.0, "royalblue",
+                 40.0, "cyan",
+                 60.0, "lime",
+                 80.0, "yellow",
+                100.0, "red"
+              ]
+            )JSON";
+
+            m_map->setPaintProperty("3d-buildings", "fill-extrusion-color", fillExtrusionColorJSON);
             m_map->setPaintProperty("3d-buildings", "fill-extrusion-opacity", .6);
 
             QVariantMap extrusionHeight;
@@ -252,10 +262,18 @@ void MapWindow::keyPressEvent(QKeyEvent *ev)
         break;
     case Qt::Key_2: {
             if (m_lineAnnotationId.isNull()) {
-                QMapbox::Coordinate topLeft     = m_map->coordinateForPixel({ 0, 0 });
-                QMapbox::Coordinate bottomRight = m_map->coordinateForPixel({ qreal(size().width()), qreal(size().height()) });
-                QMapbox::CoordinatesCollections lineGeometry { { { topLeft, bottomRight } } };
-                QMapbox::ShapeAnnotationGeometry annotationGeometry { QMapbox::ShapeAnnotationGeometry::LineStringType, lineGeometry };
+                QMapbox::Coordinates coordinates;
+                coordinates.push_back(m_map->coordinateForPixel({ 0, 0 }));
+                coordinates.push_back(m_map->coordinateForPixel({ qreal(size().width()), qreal(size().height()) }));
+
+                QMapbox::CoordinatesCollection collection;
+                collection.push_back(coordinates);
+
+                QMapbox::CoordinatesCollections lineGeometry;
+                lineGeometry.push_back(collection);
+
+                QMapbox::ShapeAnnotationGeometry annotationGeometry(QMapbox::ShapeAnnotationGeometry::LineStringType, lineGeometry);
+
                 QMapbox::LineAnnotation line;
                 line.geometry = annotationGeometry;
                 line.opacity = 0.5f;
@@ -270,12 +288,20 @@ void MapWindow::keyPressEvent(QKeyEvent *ev)
         break;
     case Qt::Key_3: {
             if (m_fillAnnotationId.isNull()) {
-                QMapbox::Coordinate topLeft     = m_map->coordinateForPixel({ 0, 0 });
-                QMapbox::Coordinate topRight    = m_map->coordinateForPixel({ 0, qreal(size().height()) });
-                QMapbox::Coordinate bottomLeft  = m_map->coordinateForPixel({ qreal(size().width()), 0 });
-                QMapbox::Coordinate bottomRight = m_map->coordinateForPixel({ qreal(size().width()), qreal(size().height()) });
-                QMapbox::CoordinatesCollections fillGeometry { { { bottomLeft, bottomRight, topRight, topLeft, bottomLeft } } };
-                QMapbox::ShapeAnnotationGeometry annotationGeometry { QMapbox::ShapeAnnotationGeometry::PolygonType, fillGeometry };
+                QMapbox::Coordinates coordinates;
+                coordinates.push_back(m_map->coordinateForPixel({ qreal(size().width()), 0 }));
+                coordinates.push_back(m_map->coordinateForPixel({ qreal(size().width()), qreal(size().height()) }));
+                coordinates.push_back(m_map->coordinateForPixel({ 0, qreal(size().height()) }));
+                coordinates.push_back(m_map->coordinateForPixel({ 0, 0 }));
+
+                QMapbox::CoordinatesCollection collection;
+                collection.push_back(coordinates);
+
+                QMapbox::CoordinatesCollections fillGeometry;
+                fillGeometry.push_back(collection);
+
+                QMapbox::ShapeAnnotationGeometry annotationGeometry(QMapbox::ShapeAnnotationGeometry::PolygonType, fillGeometry);
+
                 QMapbox::FillAnnotation fill;
                 fill.geometry = annotationGeometry;
                 fill.opacity = 0.5f;
@@ -293,8 +319,16 @@ void MapWindow::keyPressEvent(QKeyEvent *ev)
                 m_map->removeLayer("circleLayer");
                 m_map->removeSource("circleSource");
             } else {
-                QMapbox::CoordinatesCollections point { { { m_map->coordinate() } } };
-                QMapbox::Feature feature { QMapbox::Feature::PointType, point, {}, {} };
+                QMapbox::Coordinates coordinates;
+                coordinates.push_back(m_map->coordinate());
+
+                QMapbox::CoordinatesCollection collection;
+                collection.push_back(coordinates);
+
+                QMapbox::CoordinatesCollections point;
+                point.push_back(collection);
+
+                QMapbox::Feature feature(QMapbox::Feature::PointType, point, {}, {});
 
                 QVariantMap circleSource;
                 circleSource["type"] = "geojson";
@@ -312,8 +346,59 @@ void MapWindow::keyPressEvent(QKeyEvent *ev)
             }
         }
         break;
-    case Qt::Key_Tab:
-        m_map->cycleDebugOptions();
+    case Qt::Key_6: {
+            if (m_map->layerExists("innerCirclesLayer") || m_map->layerExists("outerCirclesLayer")) {
+                m_map->removeLayer("innerCirclesLayer");
+                m_map->removeLayer("outerCirclesLayer");
+                m_map->removeSource("innerCirclesSource");
+                m_map->removeSource("outerCirclesSource");
+            } else {
+                auto makePoint = [&] (double dx, double dy, const QString &color) {
+                    auto coordinate = m_map->coordinate();
+                    coordinate.first += dx;
+                    coordinate.second += dy;
+                    return QMapbox::Feature{QMapbox::Feature::PointType,
+                        {{{coordinate}}}, {{"color", color}}, {}};
+                };
+
+                // multiple features by QVector<QMapbox::Feature>
+                QVector<QMapbox::Feature> inner{
+                    makePoint(0.001,  0, "red"),
+                    makePoint(0,  0.001, "green"),
+                    makePoint(0, -0.001, "blue")
+                };
+
+                m_map->addSource("innerCirclesSource",
+                    {{"type", "geojson"}, {"data", QVariant::fromValue(inner)}});
+                m_map->addLayer({
+                    {"id", "innerCirclesLayer"},
+                    {"type", "circle"},
+                    {"source", "innerCirclesSource"}
+                });
+
+                // multiple features by QList<QMapbox::Feature>
+                QList<QMapbox::Feature> outer{
+                    makePoint( 0.002,  0.002, "cyan"),
+                    makePoint(-0.002,  0.002, "magenta"),
+                    makePoint( 0.002, -0.002, "yellow"),
+                    makePoint(-0.002, -0.002, "black")
+                };
+
+                m_map->addSource("outerCirclesSource",
+                    {{"type", "geojson"}, {"data", QVariant::fromValue(outer)}});
+                m_map->addLayer({
+                    {"id", "outerCirclesLayer"},
+                    {"type", "circle"},
+                    {"source", "outerCirclesSource"}
+                });
+
+                QVariantList getColor{"get", "color"};
+                m_map->setPaintProperty("innerCirclesLayer", "circle-radius", 10.0);
+                m_map->setPaintProperty("innerCirclesLayer", "circle-color", getColor);
+                m_map->setPaintProperty("outerCirclesLayer", "circle-radius", 15.0);
+                m_map->setPaintProperty("outerCirclesLayer", "circle-color", getColor);
+            }
+        }
         break;
     default:
         break;
@@ -324,11 +409,7 @@ void MapWindow::keyPressEvent(QKeyEvent *ev)
 
 void MapWindow::mousePressEvent(QMouseEvent *ev)
 {
-#if QT_VERSION < 0x050000
-    m_lastPos = ev->posF();
-#else
     m_lastPos = ev->localPos();
-#endif
 
     if (ev->type() == QEvent::MouseButtonPress) {
         if (ev->buttons() == (Qt::LeftButton | Qt::RightButton)) {
@@ -349,31 +430,19 @@ void MapWindow::mousePressEvent(QMouseEvent *ev)
 
 void MapWindow::mouseMoveEvent(QMouseEvent *ev)
 {
-#if QT_VERSION < 0x050000
-    QPointF delta = ev->posF() - m_lastPos;
-#else
     QPointF delta = ev->localPos() - m_lastPos;
-#endif
 
     if (!delta.isNull()) {
         if (ev->buttons() == Qt::LeftButton && ev->modifiers() & Qt::ShiftModifier) {
-            m_map->setPitch(m_map->pitch() - delta.y());
+            m_map->pitchBy(delta.y());
         } else if (ev->buttons() == Qt::LeftButton) {
             m_map->moveBy(delta);
         } else if (ev->buttons() == Qt::RightButton) {
-#if QT_VERSION < 0x050000
-            m_map->rotateBy(m_lastPos, ev->posF());
-#else
             m_map->rotateBy(m_lastPos, ev->localPos());
-#endif
         }
     }
 
-#if QT_VERSION < 0x050000
-    m_lastPos = ev->posF();
-#else
     m_lastPos = ev->localPos();
-#endif
     ev->accept();
 }
 
@@ -418,10 +487,7 @@ void MapWindow::initializeGL()
 void MapWindow::paintGL()
 {
     m_frameDraws++;
-    m_map->resize(size(), size() * pixelRatio());
-#if QT_VERSION >= 0x050400
-    // When we're using QOpenGLWidget, we need to tell Mapbox GL about the framebuffer we're using.
-    m_map->setFramebufferObject(defaultFramebufferObject());
-#endif
+    m_map->resize(size());
+    m_map->setFramebufferObject(defaultFramebufferObject(), size() * pixelRatio());
     m_map->render();
 }

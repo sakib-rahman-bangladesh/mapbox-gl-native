@@ -20,7 +20,7 @@ void HTTPFileSource::Impl::request(HTTPRequest* req)
 {
     QUrl url = req->requestUrl();
 
-    QPair<QNetworkReply*, QVector<HTTPRequest*>>& data = m_pending[url];
+    QPair<QPointer<QNetworkReply>, QVector<HTTPRequest*>>& data = m_pending[url];
     QVector<HTTPRequest*>& requestsVector = data.second;
     requestsVector.append(req);
 
@@ -29,6 +29,7 @@ void HTTPFileSource::Impl::request(HTTPRequest* req)
     }
 
     QNetworkRequest networkRequest = req->networkRequest();
+    networkRequest.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
 
     data.first = m_manager->get(networkRequest);
     connect(data.first, SIGNAL(finished()), this, SLOT(onReplyFinished()));
@@ -44,7 +45,7 @@ void HTTPFileSource::Impl::cancel(HTTPRequest* req)
         return;
     }
 
-    QPair<QNetworkReply*, QVector<HTTPRequest*>>& data = it.value();
+    QPair<QPointer<QNetworkReply>, QVector<HTTPRequest*>>& data = it.value();
     QNetworkReply* reply = data.first;
     QVector<HTTPRequest*>& requestsVector = data.second;
 
@@ -57,22 +58,14 @@ void HTTPFileSource::Impl::cancel(HTTPRequest* req)
 
     if (requestsVector.empty()) {
         m_pending.erase(it);
-#if QT_VERSION >= 0x050000
-        reply->abort();
-#else
-        // XXX: We should be aborting the reply here
-        // but a bug on Qt4 causes the connection of
-        // other ongoing requests to drop if we call
-        // abort() too often (and we do).
-        Q_UNUSED(reply);
-#endif
+        if (reply) reply->abort();
     }
 }
 
 void HTTPFileSource::Impl::onReplyFinished()
 {
     QNetworkReply* reply = qobject_cast<QNetworkReply *>(sender());
-    const QUrl& url = reply->url();
+    const QUrl& url = reply->request().url();
 
     auto it = m_pending.find(url);
     if (it == m_pending.end()) {
@@ -82,8 +75,12 @@ void HTTPFileSource::Impl::onReplyFinished()
 
     QByteArray data = reply->readAll();
     QVector<HTTPRequest*>& requestsVector = it.value().second;
-    for (auto req : requestsVector) {
-        req->handleNetworkReply(reply, data);
+
+    // Cannot use the iterator to walk the requestsVector
+    // because calling handleNetworkReply() might get
+    // requests added to the requestsVector.
+    while (!requestsVector.isEmpty()) {
+        requestsVector.takeFirst()->handleNetworkReply(reply, data);
     }
 
     m_pending.erase(it);
@@ -99,14 +96,6 @@ HTTPFileSource::~HTTPFileSource() = default;
 std::unique_ptr<AsyncRequest> HTTPFileSource::request(const Resource& resource, Callback callback)
 {
     return std::make_unique<HTTPRequest>(impl.get(), resource, callback);
-}
-
-uint32_t HTTPFileSource::maximumConcurrentRequests() {
-#if QT_VERSION >= 0x050000
-    return 20;
-#else
-    return 10;
-#endif
 }
 
 } // namespace mbgl

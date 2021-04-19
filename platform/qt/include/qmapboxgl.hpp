@@ -16,7 +16,7 @@ class QMapboxGLPrivate;
 
 // This header follows the Qt coding style: https://wiki.qt.io/Qt_Coding_Style
 
-class Q_DECL_EXPORT QMapboxGLSettings
+class Q_MAPBOXGL_EXPORT QMapboxGLSettings
 {
 public:
     QMapboxGLSettings();
@@ -24,6 +24,11 @@ public:
     enum GLContextMode {
         UniqueGLContext = 0,
         SharedGLContext
+    };
+
+    enum MapMode {
+        Continuous = 0,
+        Static
     };
 
     enum ConstrainMode {
@@ -39,6 +44,9 @@ public:
 
     GLContextMode contextMode() const;
     void setContextMode(GLContextMode);
+
+    MapMode mapMode() const;
+    void setMapMode(MapMode);
 
     ConstrainMode constrainMode() const;
     void setConstrainMode(ConstrainMode);
@@ -61,11 +69,15 @@ public:
     QString apiBaseUrl() const;
     void setApiBaseUrl(const QString &);
 
-    std::function<std::string(const std::string &&)> resourceTransform() const;
-    void setResourceTransform(const std::function<std::string(const std::string &&)> &);
+    QString localFontFamily() const;
+    void setLocalFontFamily(const QString &);
+
+    std::function<std::string(const std::string &)> resourceTransform() const;
+    void setResourceTransform(const std::function<std::string(const std::string &)> &);
 
 private:
     GLContextMode m_contextMode;
+    MapMode m_mapMode;
     ConstrainMode m_constrainMode;
     ViewportMode m_viewportMode;
 
@@ -74,18 +86,19 @@ private:
     QString m_assetPath;
     QString m_accessToken;
     QString m_apiBaseUrl;
-    std::function<std::string(const std::string &&)> m_resourceTransform;
+    QString m_localFontFamily;
+    std::function<std::string(const std::string &)> m_resourceTransform;
 };
 
-struct Q_DECL_EXPORT QMapboxGLCameraOptions {
+struct Q_MAPBOXGL_EXPORT QMapboxGLCameraOptions {
     QVariant center;  // Coordinate
     QVariant anchor;  // QPointF
     QVariant zoom;    // double
-    QVariant angle;   // double
+    QVariant bearing; // double
     QVariant pitch;   // double
 };
 
-class Q_DECL_EXPORT QMapboxGL : public QObject
+class Q_MAPBOXGL_EXPORT QMapboxGL : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(double latitude READ latitude WRITE setLatitude)
@@ -119,6 +132,13 @@ public:
         MapChangeSourceDidChange
     };
 
+    enum MapLoadingFailure {
+        StyleParseFailure,
+        StyleLoadFailure,
+        NotFoundFailure,
+        UnknownFailure
+    };
+
     // Determines the orientation of the map.
     enum NorthOrientation {
         NorthUpwards, // Default
@@ -132,8 +152,6 @@ public:
               const QSize& size = QSize(),
               qreal pixelRatio = 1);
     virtual ~QMapboxGL();
-
-    void cycleDebugOptions();
 
     QString styleJson() const;
     QString styleUrl() const;
@@ -162,6 +180,7 @@ public:
 
     double pitch() const;
     void setPitch(double pitch);
+    void pitchBy(double pitch);
 
     NorthOrientation northOrientation() const;
     void setNorthOrientation(NorthOrientation);
@@ -182,8 +201,8 @@ public:
     void updateAnnotation(QMapbox::AnnotationID, const QMapbox::Annotation &);
     void removeAnnotation(QMapbox::AnnotationID);
 
-    void setLayoutProperty(const QString &layer, const QString &property, const QVariant &value);
-    void setPaintProperty(const QString &layer, const QString &property, const QVariant &value);
+    bool setLayoutProperty(const QString &layer, const QString &property, const QVariant &value);
+    bool setPaintProperty(const QString &layer, const QString &property, const QVariant &value);
 
     bool isFullyLoaded() const;
 
@@ -191,8 +210,7 @@ public:
     void scaleBy(double scale, const QPointF &center = QPointF());
     void rotateBy(const QPointF &first, const QPointF &second);
 
-    void resize(const QSize &size, const QSize &framebufferSize);
-    void setFramebufferObject(quint32 fbo);
+    void resize(const QSize &size);
 
     double metersPerPixelAtLatitude(double latitude, double zoom) const;
     QMapbox::ProjectedMeters projectedMetersForCoordinate(const QMapbox::Coordinate &) const;
@@ -215,25 +233,37 @@ public:
     void removeImage(const QString &name);
 
     void addCustomLayer(const QString &id,
-        QMapbox::CustomLayerInitializeFunction,
-        QMapbox::CustomLayerRenderFunction,
-        QMapbox::CustomLayerDeinitializeFunction,
-        void* context,
+        QScopedPointer<QMapbox::CustomLayerHostInterface>& host,
         const QString& before = QString());
     void addLayer(const QVariantMap &params, const QString& before = QString());
     bool layerExists(const QString &id);
     void removeLayer(const QString &id);
 
+    QVector<QString> layerIds() const;
+
     void setFilter(const QString &layer, const QVariant &filter);
+    QVariant getFilter(const QString &layer) const;
+    // When rendering on a different thread,
+    // should be called on the render thread.
+    void createRenderer();
+    void destroyRenderer();
+    void setFramebufferObject(quint32 fbo, const QSize &size);
 
 public slots:
     void render();
     void connectionEstablished();
 
+    // Commit changes, load all the resources
+    // and renders the map when completed.
+    void startStaticRender();
+
 signals:
     void needsRendering();
     void mapChanged(QMapboxGL::MapChange);
+    void mapLoadingFailed(QMapboxGL::MapLoadingFailure, const QString &reason);
     void copyrightsChanged(const QString &copyrightsHtml);
+
+    void staticRenderFinished(const QString &error);
 
 private:
     Q_DISABLE_COPY(QMapboxGL)
@@ -242,5 +272,6 @@ private:
 };
 
 Q_DECLARE_METATYPE(QMapboxGL::MapChange);
+Q_DECLARE_METATYPE(QMapboxGL::MapLoadingFailure);
 
 #endif // QMAPBOXGL_H

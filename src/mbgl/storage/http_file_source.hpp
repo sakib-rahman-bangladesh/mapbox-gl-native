@@ -1,6 +1,7 @@
 #pragma once
 
 #include <mbgl/storage/file_source.hpp>
+#include <mbgl/storage/resource.hpp>
 
 namespace mbgl {
 
@@ -10,8 +11,9 @@ public:
     ~HTTPFileSource() override;
 
     std::unique_ptr<AsyncRequest> request(const Resource&, Callback) override;
-
-    static uint32_t maximumConcurrentRequests();
+    bool canRequest(const Resource& resource) const override {
+        return resource.hasLoadingMethod(Resource::LoadingMethod::Network);
+    }
 
     class Impl;
 

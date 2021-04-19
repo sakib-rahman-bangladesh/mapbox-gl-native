@@ -9,15 +9,19 @@
 #include <memory>
 
 namespace mbgl {
+
+namespace gfx {
+class IndexBuffer;
+} // namespace gfx
+
 namespace gl {
 
 class Context;
 
 class VertexArrayState {
 public:
-    VertexArrayState(UniqueVertexArray vertexArray_, Context& context)
-        : vertexArray(std::move(vertexArray_)),
-          bindings(makeBindings(context, std::make_index_sequence<MAX_ATTRIBUTES>())) {
+    VertexArrayState(UniqueVertexArray vertexArray_)
+        : vertexArray(std::move(vertexArray_)) {
     }
 
     void setDirty() {
@@ -31,13 +35,7 @@ public:
     State<value::BindElementBuffer> indexBuffer;
 
     using AttributeState = State<value::VertexAttribute, Context&, AttributeLocation>;
-    std::array<AttributeState, MAX_ATTRIBUTES> bindings;
-
-private:
-    template <std::size_t... I>
-    std::array<AttributeState, MAX_ATTRIBUTES> makeBindings(Context& context, std::index_sequence<I...>) {
-        return {{ AttributeState { context, I }... }};
-    }
+    std::vector<AttributeState> bindings;
 };
 
 class VertexArrayStateDeleter {
@@ -63,7 +61,7 @@ public:
         : state(std::move(state_)) {
     }
 
-    void bind(Context&, BufferID indexBuffer, const AttributeBindingArray&);
+    void bind(Context&, const gfx::IndexBuffer&, const AttributeBindingArray&);
 
 private:
     UniqueVertexArrayState state;

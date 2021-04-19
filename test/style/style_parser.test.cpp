@@ -11,6 +11,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <set>
 
 #include <dirent.h>
 
@@ -73,32 +74,133 @@ TEST_P(StyleParserTest, ParseStyle) {
     }
 }
 
-INSTANTIATE_TEST_CASE_P(StyleParser, StyleParserTest, ::testing::ValuesIn([] {
-    std::vector<std::string> names;
-    const std::string ending = ".info.json";
+INSTANTIATE_TEST_SUITE_P(StyleParser, StyleParserTest, ::testing::ValuesIn([] {
+                             std::vector<std::string> names;
+                             const std::string ending = ".info.json";
 
-    const std::string style_directory = "test/fixtures/style_parser";
-    DIR *dir = opendir(style_directory.c_str());
-    if (dir != nullptr) {
-        for (dirent *dp = nullptr; (dp = readdir(dir)) != nullptr;) {
-            const std::string name = dp->d_name;
-            if (name.length() >= ending.length() && name.compare(name.length() - ending.length(), ending.length(), ending) == 0) {
-                names.push_back(name.substr(0, name.length() - ending.length()));
-            }
-        }
-        closedir(dir);
-    }
+                             const std::string style_directory = "test/fixtures/style_parser";
+                             DIR *dir = opendir(style_directory.c_str());
+                             if (dir != nullptr) {
+                                 for (dirent *dp = nullptr; (dp = readdir(dir)) != nullptr;) {
+                                     const std::string name = dp->d_name;
+                                     if (name.length() >= ending.length() &&
+                                         name.compare(name.length() - ending.length(), ending.length(), ending) == 0) {
+                                         names.push_back(name.substr(0, name.length() - ending.length()));
+                                     }
+                                 }
+                                 closedir(dir);
+                             }
 
-    EXPECT_GT(names.size(), 0u);
-    return names;
-}()));
+                             EXPECT_GT(names.size(), 0u);
+                             return names;
+                         }()));
 
 TEST(StyleParser, FontStacks) {
     style::Parser parser;
     parser.parse(util::read_file("test/fixtures/style_parser/font_stacks.json"));
+    std::set<mbgl::FontStack> expected;
+    expected.insert(FontStack({"a"}));
+    expected.insert(FontStack({"a", "b"}));
+    expected.insert(FontStack({"a", "b", "c"}));
+    std::set<mbgl::FontStack> result = parser.fontStacks();
+    ASSERT_EQ(expected, result);
+}
+
+TEST(StyleParser, FontStacksNoTextField) {
+    style::Parser parser;
+    parser.parse(R"({
+        "version": 8,
+        "layers": [{
+            "id": "symbol",
+            "type": "symbol",
+            "source": "vector",
+            "layout": {
+                "text-font": ["a"]
+            }
+        }]
+    })");
     auto result = parser.fontStacks();
-    ASSERT_EQ(3u, result.size());
-    ASSERT_EQ(FontStack({"a"}), result[0]);
-    ASSERT_EQ(FontStack({"a", "b"}), result[1]);
-    ASSERT_EQ(FontStack({"a", "b", "c"}), result[2]);
+    ASSERT_EQ(0u, result.size());
+}
+
+TEST(StyleParser, FontStacksCaseExpression) {
+    style::Parser parser;
+    parser.parse(R"({
+        "version": 8,
+        "layers": [{
+            "id": "symbol",
+            "type": "symbol",
+            "source": "vector",
+            "layout": {
+                "text-field": "a",
+                "text-font": ["case", ["==", "a", ["string", ["get", "text-font"]]], ["literal", ["Arial"]], ["literal", ["Helvetica"]]]
+            }
+        }]
+    })");
+    std::set<mbgl::FontStack> expected;
+    expected.insert(FontStack({"Arial"}));
+    expected.insert(FontStack({"Helvetica"}));
+    std::set<mbgl::FontStack> result = parser.fontStacks();
+    ASSERT_EQ(expected, result);
+}
+
+TEST(StyleParser, FontStacksMatchExpression) {
+    style::Parser parser;
+    parser.parse(R"({
+        "version": 8,
+        "layers": [{
+            "id": "symbol",
+            "type": "symbol",
+            "source": "vector",
+            "layout": {
+                "text-field": "a",
+                "text-font": ["match", ["get", "text-font"], "a", ["literal", ["Arial"]], ["literal", ["Helvetica"]]]
+            }
+        }]
+    })");
+    std::set<mbgl::FontStack> expected;
+    expected.insert(FontStack({"Arial"}));
+    expected.insert(FontStack({"Helvetica"}));
+    std::set<mbgl::FontStack> result = parser.fontStacks();
+    ASSERT_EQ(expected, result);
+}
+
+TEST(StyleParser, FontStacksStepExpression) {
+    style::Parser parser;
+    parser.parse(R"({
+        "version": 8,
+        "layers": [{
+            "id": "symbol",
+            "type": "symbol",
+            "source": "vector",
+            "layout": {
+                "text-field": "a",
+                "text-font": ["array", "string", ["step", ["get", "text-font"], ["literal", ["Arial"]], 0, ["literal", ["Helvetica"]]]]
+            }
+        }]
+    })");
+    std::set<mbgl::FontStack> expected;
+    expected.insert(FontStack({"Arial"}));
+    expected.insert(FontStack({"Helvetica"}));
+    std::set<mbgl::FontStack> result = parser.fontStacks();
+    ASSERT_EQ(expected, result);
+}
+
+TEST(StyleParser, FontStacksGetExpression) {
+    // Invalid style, but not currently validated.
+    style::Parser parser;
+    parser.parse(R"({
+        "version": 8,
+        "layers": [{
+            "id": "symbol",
+            "type": "symbol",
+            "source": "vector",
+            "layout": {
+                "text-field": "a",
+                "text-font": ["array", "string", ["get", "text-font"]]
+            }
+        }]
+    })");
+    auto result = parser.fontStacks();
+    ASSERT_EQ(0u, result.size());
 }

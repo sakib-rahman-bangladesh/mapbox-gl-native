@@ -7,7 +7,11 @@
 #include <mbgl/actor/actor_ref.hpp>
 #include <mbgl/util/optional.hpp>
 #include <mbgl/util/immutable.hpp>
-#include <mbgl/style/layer_impl.hpp>
+#include <mbgl/style/layer_properties.hpp>
+#include <mbgl/geometry/feature_index.hpp>
+#include <mbgl/renderer/bucket.hpp>
+#include <mbgl/renderer/render_layer.hpp>
+#include <mbgl/tile/tile.hpp>
 
 #include <atomic>
 #include <memory>
@@ -16,7 +20,7 @@ namespace mbgl {
 
 class GeometryTile;
 class GeometryTileData;
-class SymbolLayout;
+class Layout;
 
 namespace style {
 class Layer;
@@ -27,24 +31,32 @@ public:
     GeometryTileWorker(ActorRef<GeometryTileWorker> self,
                        ActorRef<GeometryTile> parent,
                        OverscaledTileID,
-                       const std::string&,
+                       std::string,
                        const std::atomic<bool>&,
-                       const MapMode,
-                       const float pixelRatio,
-                       const bool showCollisionBoxes_);
+                       MapMode,
+                       float pixelRatio,
+                       bool showCollisionBoxes_);
     ~GeometryTileWorker();
 
-    void setLayers(std::vector<Immutable<style::Layer::Impl>>, uint64_t correlationID);
-    void setData(std::unique_ptr<const GeometryTileData>, uint64_t correlationID);
+    void setLayers(std::vector<Immutable<style::LayerProperties>>,
+                   std::set<std::string> availableImages,
+                   uint64_t correlationID);
+    void setData(std::unique_ptr<const GeometryTileData>,
+                 std::set<std::string> availableImages,
+                 uint64_t correlationID);
+    void reset(uint64_t correlationID_);
     void setShowCollisionBoxes(bool showCollisionBoxes_, uint64_t correlationID_);
-    
-    void onGlyphsAvailable(GlyphMap glyphs);
-    void onImagesAvailable(ImageMap images, uint64_t imageCorrelationID);
+
+    void onGlyphsAvailable(GlyphMap newGlyphMap);
+    void onImagesAvailable(ImageMap newIconMap,
+                           ImageMap newPatternMap,
+                           ImageVersionMap versionMap,
+                           uint64_t imageCorrelationID);
 
 private:
     void coalesced();
-    void redoLayout();
-    void attemptPlacement();
+    void parse();
+    void finalizeLayout();
     
     void coalesce();
 
@@ -52,7 +64,10 @@ private:
     void requestNewImages(const ImageDependencies&);
    
     void symbolDependenciesChanged();
-    bool hasPendingSymbolDependencies() const;
+    bool hasPendingDependencies() const;
+    bool hasPendingParseResult() const;
+
+    void checkPatternLayout(std::unique_ptr<Layout> layout);
 
     ActorRef<GeometryTileWorker> self;
     ActorRef<GeometryTile> parent;
@@ -62,12 +77,15 @@ private:
     const std::atomic<bool>& obsolete;
     const MapMode mode;
     const float pixelRatio;
+    
+    std::unique_ptr<FeatureIndex> featureIndex;
+    std::unordered_map<std::string, LayerRenderData> renderData;
 
     enum State {
         Idle,
         Coalescing,
-        NeedLayout,
-        NeedPlacement
+        NeedsParse,
+        NeedsSymbolLayout
     };
 
     State state = Idle;
@@ -75,17 +93,21 @@ private:
     uint64_t imageCorrelationID = 0;
 
     // Outer optional indicates whether we've received it or not.
-    optional<std::vector<Immutable<style::Layer::Impl>>> layers;
+    optional<std::vector<Immutable<style::LayerProperties>>> layers;
     optional<std::unique_ptr<const GeometryTileData>> data;
 
-    bool symbolLayoutsNeedPreparation = false;
-    std::vector<std::unique_ptr<SymbolLayout>> symbolLayouts;
+    std::vector<std::unique_ptr<Layout>> layouts;
+
     GlyphDependencies pendingGlyphDependencies;
     ImageDependencies pendingImageDependencies;
     GlyphMap glyphMap;
     ImageMap imageMap;
-    
+    ImageMap patternMap;
+    ImageVersionMap versionMap;
+    std::set<std::string> availableImages;
+
     bool showCollisionBoxes;
+    bool firstLoad = true;
 };
 
 } // namespace mbgl

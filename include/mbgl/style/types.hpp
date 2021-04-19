@@ -10,6 +10,7 @@ namespace style {
 enum class SourceType : uint8_t {
     Vector,
     Raster,
+    RasterDEM,
     GeoJSON,
     Video,
     Annotations,
@@ -37,6 +38,16 @@ enum class LineJoinType : uint8_t {
     FlipBevel
 };
 
+enum class RasterResamplingType : bool {
+    Linear,
+    Nearest
+};
+
+enum class HillshadeIlluminationAnchorType : bool {
+    Map,
+    Viewport
+};
+
 enum class TranslateAnchorType : bool {
     Map,
     Viewport
@@ -52,9 +63,16 @@ enum class CirclePitchScaleType : bool {
     Viewport,
 };
 
-enum class SymbolPlacementType : bool {
+enum class SymbolPlacementType : uint8_t {
     Point,
     Line,
+    LineCenter
+};
+    
+enum class SymbolZOrderType : uint8_t {
+    Auto,
+    ViewportY,
+    Source
 };
 
 enum class AlignmentType : uint8_t {
@@ -64,6 +82,7 @@ enum class AlignmentType : uint8_t {
 };
 
 enum class TextJustifyType : uint8_t {
+    Auto,
     Center,
     Left,
     Right
@@ -81,6 +100,8 @@ enum class SymbolAnchorType : uint8_t {
     BottomRight
 };
 
+using TextVariableAnchorType = SymbolAnchorType;
+
 enum class TextTransformType : uint8_t {
     None,
     Uppercase,
@@ -92,6 +113,11 @@ enum class IconTextFitType : uint8_t {
     Both,
     Width,
     Height
+};
+
+enum class TextWritingModeType : uint8_t {
+    Horizontal,
+    Vertical
 };
 
 enum class LightAnchorType: bool {

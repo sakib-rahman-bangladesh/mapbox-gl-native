@@ -1,4 +1,5 @@
 #include <mbgl/style/conversion/get_json_type.hpp>
+#include <mbgl/style/conversion_impl.hpp>
 #include <mbgl/util/feature.hpp>
 
 namespace mbgl {
@@ -22,11 +23,9 @@ std::string getJSONType(const Convertible& value) {
     // conversion succeeds.
     assert(v);
 
-    return v->match(
-        [&] (const std::string&) { return "string"; },
-        [&] (bool) { return "boolean"; },
-        [&] (auto) { return "number"; }
-    );
+    return v->match([&](const std::string&) { return "string"; },
+                    [&](bool) { return "boolean"; },
+                    [&](const auto&) { return "number"; });
 }
 
 } // namespace conversion

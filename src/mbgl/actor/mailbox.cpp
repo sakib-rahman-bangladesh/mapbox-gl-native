@@ -6,8 +6,28 @@
 
 namespace mbgl {
 
-Mailbox::Mailbox(Scheduler& scheduler_)
-    : scheduler(scheduler_) {
+Mailbox::Mailbox() = default;
+
+Mailbox::Mailbox(Scheduler& scheduler_) : weakScheduler(scheduler_.makeWeakPtr()) {}
+
+void Mailbox::open(Scheduler& scheduler_) {
+    assert(!weakScheduler);
+
+    // As with close(), block until neither receive() nor push() are in progress, and acquire the two
+    // mutexes in the same order.
+    std::lock_guard<std::recursive_mutex> receivingLock(receivingMutex);
+    std::lock_guard<std::mutex> pushingLock(pushingMutex);
+
+    weakScheduler = scheduler_.makeWeakPtr();
+
+    if (closed) {
+        return;
+    }
+    
+    if (!queue.empty()) {
+        auto guard = weakScheduler.lock();
+        if (weakScheduler) weakScheduler->schedule(makeClosure(shared_from_this()));
+    }
 }
 
 void Mailbox::close() {
@@ -22,6 +42,10 @@ void Mailbox::close() {
     closed = true;
 }
 
+bool Mailbox::isOpen() const {
+    return bool(weakScheduler);
+}
+
 void Mailbox::push(std::unique_ptr<Message> message) {
     std::lock_guard<std::mutex> pushingLock(pushingMutex);
 
@@ -32,13 +56,17 @@ void Mailbox::push(std::unique_ptr<Message> message) {
     std::lock_guard<std::mutex> queueLock(queueMutex);
     bool wasEmpty = queue.empty();
     queue.push(std::move(message));
-    if (wasEmpty) {
-        scheduler.schedule(shared_from_this());
+    auto guard = weakScheduler.lock();
+    if (wasEmpty && weakScheduler) {
+        weakScheduler->schedule(makeClosure(shared_from_this()));
     }
 }
 
 void Mailbox::receive() {
     std::lock_guard<std::recursive_mutex> receivingLock(receivingMutex);
+
+    auto guard = weakScheduler.lock();
+    assert(weakScheduler);
 
     if (closed) {
         return;
@@ -58,14 +86,20 @@ void Mailbox::receive() {
     (*message)();
 
     if (!wasEmpty) {
-        scheduler.schedule(shared_from_this());
+        weakScheduler->schedule(makeClosure(shared_from_this()));
     }
 }
 
-void Mailbox::maybeReceive(std::weak_ptr<Mailbox> mailbox) {
+// static
+void Mailbox::maybeReceive(const std::weak_ptr<Mailbox>& mailbox) {
     if (auto locked = mailbox.lock()) {
         locked->receive();
     }
+}
+
+// static
+std::function<void()> Mailbox::makeClosure(std::weak_ptr<Mailbox> mailbox) {
+    return [mailbox = std::move(mailbox)]() { maybeReceive(mailbox); };
 }
 
 } // namespace mbgl

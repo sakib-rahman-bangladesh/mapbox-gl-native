@@ -61,7 +61,7 @@ public:
         const double easting  = util::EARTH_RADIUS_M * constrainedLongitude * util::DEG2RAD;
         const double northing = 0.5 * util::EARTH_RADIUS_M * std::log((1 + f) / (1 - f));
 
-        return ProjectedMeters(northing, easting);
+        return {northing, easting};
     }
 
     static LatLng latLngForProjectedMeters(const ProjectedMeters& projectedMeters) {
@@ -71,11 +71,16 @@ public:
         latitude = util::clamp(latitude, -util::LATITUDE_MAX, util::LATITUDE_MAX);
         longitude = util::clamp(longitude, -util::LONGITUDE_MAX, util::LONGITUDE_MAX);
 
-        return LatLng(latitude, longitude);
+        return {latitude, longitude};
     }
 
     static Point<double> project(const LatLng& latLng, double scale) {
         return project_(latLng, worldSize(scale));
+    }
+
+    //Returns point on tile
+    static Point<double> project(const LatLng& latLng, int32_t zoom) {
+        return project_(latLng, 1 << zoom);
     }
 
     static LatLng unproject(const Point<double>& p, double scale, LatLng::WrapMode wrapMode = LatLng::Unwrapped) {
@@ -86,22 +91,14 @@ public:
             wrapMode
         };
     }
-    
-    // Project lat, lon to point in a zoom-dependent world size
-    static Point<double> project(const LatLng& point, uint8_t zoom, uint16_t tileSize) {
-        const double t2z = tileSize * std::pow(2, zoom);
-        Point<double> pt = project_(point, t2z);
-        // Flip y coordinate
-        auto x = ::round(std::min(pt.x, t2z));
-        auto y = ::round(std::min(t2z - pt.y, t2z));
-        return { x, y };
-    }
+
 private:
     static Point<double> project_(const LatLng& latLng, double worldSize) {
+        const double latitude = util::clamp(latLng.latitude(), -util::LATITUDE_MAX, util::LATITUDE_MAX);
         return Point<double> {
             util::LONGITUDE_MAX + latLng.longitude(),
-            util::LONGITUDE_MAX - util::RAD2DEG * std::log(std::tan(M_PI / 4 + latLng.latitude() * M_PI / util::DEGREES_MAX))
-        } * worldSize / util::DEGREES_MAX;
+            util::LONGITUDE_MAX - util::RAD2DEG * std::log(std::tan(M_PI / 4 + latitude * M_PI / util::DEGREES_MAX))
+        } * (worldSize / util::DEGREES_MAX);
     }
 };
 

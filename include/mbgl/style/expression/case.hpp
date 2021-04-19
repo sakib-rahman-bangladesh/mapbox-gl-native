@@ -1,10 +1,11 @@
 #pragma once
 
 #include <mbgl/style/expression/expression.hpp>
-#include <mbgl/style/conversion.hpp>
 #include <mbgl/style/expression/parsing_context.hpp>
+#include <mbgl/style/conversion.hpp>
 
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace mbgl {
@@ -16,8 +17,7 @@ public:
     using Branch = std::pair<std::unique_ptr<Expression>, std::unique_ptr<Expression>>;
 
     Case(type::Type type_, std::vector<Branch> branches_, std::unique_ptr<Expression> otherwise_)
-        : Expression(type_), branches(std::move(branches_)), otherwise(std::move(otherwise_)) {
-    }
+        : Expression(Kind::Case, std::move(type_)), branches(std::move(branches_)), otherwise(std::move(otherwise_)) {}
 
     static ParseResult parse(const mbgl::style::conversion::Convertible& value, ParsingContext& ctx);
 
@@ -26,6 +26,9 @@ public:
     
     bool operator==(const Expression& e) const override;
 
+    std::vector<optional<Value>> possibleOutputs() const override;
+
+    std::string getOperator() const override { return "case"; }
 private:
     std::vector<Branch> branches;
     std::unique_ptr<Expression> otherwise;

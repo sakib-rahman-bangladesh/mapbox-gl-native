@@ -11,6 +11,8 @@
 #include <unordered_set>
 #include <unordered_map>
 
+#include <mapbox/std/weak.hpp>
+
 namespace mbgl {
 
 class LatLngBounds;
@@ -28,8 +30,8 @@ public:
     AnnotationManager(style::Style&);
     ~AnnotationManager();
 
-    AnnotationID addAnnotation(const Annotation&, const uint8_t maxZoom);
-    bool updateAnnotation(const AnnotationID&, const Annotation&, const uint8_t maxZoom);
+    AnnotationID addAnnotation(const Annotation&);
+    bool updateAnnotation(const AnnotationID&, const Annotation&);
     void removeAnnotation(const AnnotationID&);
 
     void addImage(std::unique_ptr<style::Image>);
@@ -48,14 +50,16 @@ public:
     static const std::string PointLayerID;
     static const std::string ShapeLayerID;
 
-private:
-    void add(const AnnotationID&, const SymbolAnnotation&, const uint8_t);
-    void add(const AnnotationID&, const LineAnnotation&, const uint8_t);
-    void add(const AnnotationID&, const FillAnnotation&, const uint8_t);
+    mapbox::base::WeakPtr<AnnotationManager> makeWeakPtr() { return weakFactory.makeWeakPtr(); }
 
-    void update(const AnnotationID&, const SymbolAnnotation&, const uint8_t);
-    void update(const AnnotationID&, const LineAnnotation&, const uint8_t);
-    void update(const AnnotationID&, const FillAnnotation&, const uint8_t);
+private:
+    void add(const AnnotationID&, const SymbolAnnotation&);
+    void add(const AnnotationID&, const LineAnnotation&);
+    void add(const AnnotationID&, const FillAnnotation&);
+
+    void update(const AnnotationID&, const SymbolAnnotation&);
+    void update(const AnnotationID&, const LineAnnotation&);
+    void update(const AnnotationID&, const FillAnnotation&);
 
     void remove(const AnnotationID&);
 
@@ -84,8 +88,7 @@ private:
     ImageMap images;
 
     std::unordered_set<AnnotationTile*> tiles;
-
-    friend class AnnotationTile;
+    mapbox::base::WeakPtrFactory<AnnotationManager> weakFactory{this};
 };
 
 } // namespace mbgl

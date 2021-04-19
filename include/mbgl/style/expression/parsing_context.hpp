@@ -5,10 +5,13 @@
 #include <mbgl/style/expression/type.hpp>
 #include <mbgl/style/conversion.hpp>
 
+#include <iterator>
 #include <map>
-#include <string>
-#include <vector>
 #include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace mbgl {
 namespace style {
@@ -50,11 +53,30 @@ public:
 
 } // namespace detail
 
+/*
+    Controls the annotation behavior of the parser when encountering an expression
+    whose type is not a subtype of the expected type. The default behavior, used
+    when optional<TypeAnnotationOption> is a nullopt, is as follows:
+
+    When we expect a number, string, boolean, or array but have a value, wrap it in an assertion.
+    When we expect a color or formatted string, but have a string or value, wrap it in a coercion.
+    Otherwise, we do static type-checking.
+
+    These behaviors are overridable for:
+      * The "coalesce" operator, which needs to omit type annotations.
+      * String-valued properties (e.g. `text-field`), where coercion is more convenient than assertion.
+*/
+enum class TypeAnnotationOption {
+    coerce,
+    assert,
+    omit
+};
+
 class ParsingContext {
 public:
     ParsingContext() : errors(std::make_shared<std::vector<ParsingError>>()) {}
     ParsingContext(std::string key_) : key(std::move(key_)), errors(std::make_shared<std::vector<ParsingError>>()) {}
-    explicit ParsingContext(optional<type::Type> expected_)
+    explicit ParsingContext(type::Type expected_)
         : expected(std::move(expected_)),
           errors(std::make_shared<std::vector<ParsingError>>())
     {}
@@ -66,24 +88,31 @@ public:
     std::string getKey() const { return key; }
     optional<type::Type> getExpected() const { return expected; }
     const std::vector<ParsingError>& getErrors() const { return *errors; }
+    std::string getCombinedErrors() const;
 
     /*
-        Parse the given style-spec JSON value into an Expression object.
-        Specifically, this function is responsible for determining the expression
-        type (either Literal, or the one named in value[0]) and dispatching to the
-        appropriate ParseXxxx::parse(const V&, ParsingContext) method.
+        Parse the given style-spec JSON value as an expression.
     */
-    ParseResult parse(const mbgl::style::conversion::Convertible& value);
-    
+    ParseResult parseExpression(const mbgl::style::conversion::Convertible& value,
+                                const optional<TypeAnnotationOption>& = {});
+
     /*
-        Parse a child expression.
+        Parse the given style-spec JSON value as an expression intended to be used
+        in a layout or paint property.  This entails checking additional constraints
+        that exist in that context but not, e.g., for filters.
+    */
+    ParseResult parseLayerPropertyExpression(const mbgl::style::conversion::Convertible& value);
+
+    /*
+        Parse a child expression. For use by individual Expression::parse() methods.
     */
     ParseResult parse(const mbgl::style::conversion::Convertible&,
                       std::size_t,
-                      optional<type::Type> = {});
-    
+                      optional<type::Type> = {},
+                      const optional<TypeAnnotationOption>& = {});
+
     /*
-        Parse a child expression.
+        Parse a child expression.  For use by individual Expression::parse() methods.
     */
     ParseResult parse(const mbgl::style::conversion::Convertible&,
                       std::size_t index,
@@ -94,22 +123,21 @@ public:
         Check whether `t` is a subtype of `expected`, collecting an error if not.
      */
     optional<std::string> checkType(const type::Type& t);
-    
-    optional<std::shared_ptr<Expression>> getBinding(const std::string name) {
+
+    optional<std::shared_ptr<Expression>> getBinding(const std::string& name) {
         if (!scope) return optional<std::shared_ptr<Expression>>();
         return scope->get(name);
     }
 
-    void error(std::string message) {
-        errors->push_back({message, key});
-    }
-    
+    void error(std::string message) { errors->push_back({std::move(message), key}); }
+
     void error(std::string message, std::size_t child) {
-        errors->push_back({message, key + "[" + util::toString(child) + "]"});
+        errors->push_back({std::move(message), key + "[" + util::toString(child) + "]"});
     }
     
     void error(std::string message, std::size_t child, std::size_t grandchild) {
-        errors->push_back({message, key + "[" + util::toString(child) + "][" + util::toString(grandchild) + "]"});
+        errors->push_back(
+            {std::move(message), key + "[" + util::toString(child) + "][" + util::toString(grandchild) + "]"});
     }
     
     void appendErrors(ParsingContext&& ctx) {
@@ -133,15 +161,22 @@ private:
         errors(std::move(errors_))
     {}
     
+    
+    /*
+        Parse the given style-spec JSON value into an Expression object.
+        Specifically, this function is responsible for determining the expression
+        type (either Literal, or the one named in value[0]) and dispatching to the
+        appropriate ParseXxxx::parse(const V&, ParsingContext) method.
+    */
+    ParseResult parse(const mbgl::style::conversion::Convertible& value, const optional<TypeAnnotationOption>& = {});
+
     std::string key;
     optional<type::Type> expected;
     std::shared_ptr<detail::Scope> scope;
     std::shared_ptr<std::vector<ParsingError>> errors;
 };
 
-using ParseFunction = ParseResult (*)(const conversion::Convertible&, ParsingContext&);
-using ExpressionRegistry = std::unordered_map<std::string, ParseFunction>;
-const ExpressionRegistry& getExpressionRegistry();
+bool isExpression(const std::string&);
 
 } // namespace expression
 } // namespace style

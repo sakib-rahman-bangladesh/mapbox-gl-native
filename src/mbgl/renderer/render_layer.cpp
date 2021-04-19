@@ -1,51 +1,30 @@
 #include <mbgl/renderer/render_layer.hpp>
-#include <mbgl/renderer/layers/render_background_layer.hpp>
-#include <mbgl/renderer/layers/render_circle_layer.hpp>
-#include <mbgl/renderer/layers/render_custom_layer.hpp>
-#include <mbgl/renderer/layers/render_fill_extrusion_layer.hpp>
-#include <mbgl/renderer/layers/render_fill_layer.hpp>
-#include <mbgl/renderer/layers/render_line_layer.hpp>
-#include <mbgl/renderer/layers/render_raster_layer.hpp>
-#include <mbgl/renderer/layers/render_symbol_layer.hpp>
-#include <mbgl/style/types.hpp>
+#include <mbgl/renderer/paint_parameters.hpp>
+#include <mbgl/renderer/render_source.hpp>
 #include <mbgl/renderer/render_tile.hpp>
+#include <mbgl/style/types.hpp>
+#include <mbgl/style/layer.hpp>
+#include <mbgl/tile/tile.hpp>
+#include <mbgl/gfx/context.hpp>
+#include <mbgl/util/logging.hpp>
 
 namespace mbgl {
 
 using namespace style;
 
-std::unique_ptr<RenderLayer> RenderLayer::create(Immutable<Layer::Impl> impl) {
-    switch (impl->type) {
-    case LayerType::Fill:
-        return std::make_unique<RenderFillLayer>(staticImmutableCast<FillLayer::Impl>(impl));
-    case LayerType::Line:
-        return std::make_unique<RenderLineLayer>(staticImmutableCast<LineLayer::Impl>(impl));
-    case LayerType::Circle:
-        return std::make_unique<RenderCircleLayer>(staticImmutableCast<CircleLayer::Impl>(impl));
-    case LayerType::Symbol:
-        return std::make_unique<RenderSymbolLayer>(staticImmutableCast<SymbolLayer::Impl>(impl));
-    case LayerType::Raster:
-        return std::make_unique<RenderRasterLayer>(staticImmutableCast<RasterLayer::Impl>(impl));
-    case LayerType::Background:
-        return std::make_unique<RenderBackgroundLayer>(staticImmutableCast<BackgroundLayer::Impl>(impl));
-    case LayerType::Custom:
-        return std::make_unique<RenderCustomLayer>(staticImmutableCast<CustomLayer::Impl>(impl));
-    case LayerType::FillExtrusion:
-        return std::make_unique<RenderFillExtrusionLayer>(staticImmutableCast<FillExtrusionLayer::Impl>(impl));
-    }
-
-    // Not reachable, but placate GCC.
-    assert(false);
-    return nullptr;
+RenderLayer::RenderLayer(Immutable<style::LayerProperties> properties)
+    : evaluatedProperties(std::move(properties)),
+      baseImpl(evaluatedProperties->baseImpl) {
 }
 
-RenderLayer::RenderLayer(style::LayerType type_, Immutable<style::Layer::Impl> baseImpl_)
-        : type(type_),
-          baseImpl(baseImpl_) {
+void RenderLayer::transition(const TransitionParameters& parameters, Immutable<style::Layer::Impl> newImpl) {
+    baseImpl = std::move(newImpl);
+    transition(parameters);
 }
 
-void RenderLayer::setImpl(Immutable<style::Layer::Impl> impl) {
-    baseImpl = impl;
+bool RenderLayer::needsPlacement() const {
+    return baseImpl->getTypeInfo()->crossTileIndex == style::LayerTypeInfo::CrossTileIndex::Required
+           && !placementData.empty();
 }
 
 const std::string& RenderLayer::getID() const {
@@ -53,18 +32,75 @@ const std::string& RenderLayer::getID() const {
 }
 
 bool RenderLayer::hasRenderPass(RenderPass pass) const {
-    return bool(passes & pass);
+    return passes & pass;
 }
 
-bool RenderLayer::needsRendering(float zoom) const {
+bool RenderLayer::needsRendering() const {
     return passes != RenderPass::None
-           && baseImpl->visibility != style::VisibilityType::None
-           && baseImpl->minZoom <= zoom
-           && baseImpl->maxZoom >= zoom;
+           && baseImpl->visibility != style::VisibilityType::None;
 }
 
-void RenderLayer::setRenderTiles(std::vector<std::reference_wrapper<RenderTile>> tiles) {
-    renderTiles = std::move(tiles);
+bool RenderLayer::supportsZoom(float zoom) const {
+    // TODO: shall we use rounding or epsilon comparisons?
+    return baseImpl->minZoom <= zoom && baseImpl->maxZoom >= zoom;
+}
+
+void RenderLayer::prepare(const LayerPrepareParameters& params) {
+    assert(params.source);
+    assert(params.source->isEnabled());
+    renderTiles = params.source->getRenderTiles();
+    addRenderPassesFromTiles();
+}
+
+optional<Color> RenderLayer::getSolidBackground() const {
+    return nullopt;
+}
+
+void RenderLayer::markContextDestroyed() {
+    // no-op
+}
+
+void RenderLayer::checkRenderability(const PaintParameters& parameters,
+                                     const uint32_t activeBindingCount) {
+    // Only warn once for every layer.
+    if (hasRenderFailures) {
+        return;
+    }
+
+    if (activeBindingCount > parameters.context.maximumVertexBindingCount) {
+        Log::Error(Event::OpenGL,
+                   "The layer '%s' uses more data-driven properties than the current device "
+                   "supports, and will have rendering errors. To ensure compatibility with this "
+                   "device, use %d fewer data driven properties in this layer.",
+                   getID().c_str(),
+                   activeBindingCount - gfx::Context::minimumRequiredVertexBindingCount);
+        hasRenderFailures = true;
+    } else if (activeBindingCount > gfx::Context::minimumRequiredVertexBindingCount) {
+        Log::Warning(Event::OpenGL,
+                     "The layer '%s' uses more data-driven properties than some devices may support. "
+                     "Though it will render correctly on this device, it may have rendering errors "
+                     "on other devices. To ensure compatibility with all devices, use %d fewer "
+                     "data-driven properties in this layer.",
+                     getID().c_str(),
+                     activeBindingCount - gfx::Context::minimumRequiredVertexBindingCount);
+        hasRenderFailures = true;
+    }
+}
+
+void RenderLayer::addRenderPassesFromTiles() {
+    assert(renderTiles);
+    for (const RenderTile& tile : *renderTiles) {
+        if (const LayerRenderData* renderData = tile.getLayerRenderData(*baseImpl)) {
+            passes |= RenderPass(renderData->layerProperties->renderPasses);
+        }
+    }
+}
+
+const LayerRenderData* RenderLayer::getRenderDataForPass(const RenderTile& tile, RenderPass pass) const {
+    if (const LayerRenderData* renderData = tile.getLayerRenderData(*baseImpl)) {
+        return bool(RenderPass(renderData->layerProperties->renderPasses) & pass) ? renderData : nullptr;
+    }
+    return nullptr;
 }
 
 } //namespace mbgl

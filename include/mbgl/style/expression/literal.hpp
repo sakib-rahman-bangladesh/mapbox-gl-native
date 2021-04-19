@@ -12,8 +12,11 @@ namespace expression {
 
 class Literal : public Expression {
 public:
-    Literal(Value value_) : Expression(typeOf(value_)), value(value_) {}
-    Literal(type::Array type_, std::vector<Value> value_) : Expression(type_), value(value_) {}
+    Literal(const Value& value_) : Expression(Kind::Literal, typeOf(value_)), value(value_) {}
+
+    Literal(const type::Array& type_, std::vector<Value> value_)
+        : Expression(Kind::Literal, type_), value(std::move(value_)) {}
+
     EvaluationResult evaluate(const EvaluationContext&) const override {
         return value;
     }
@@ -23,12 +26,24 @@ public:
     void eachChild(const std::function<void(const Expression&)>&) const override {}
     
     bool operator==(const Expression& e) const override {
-        if (auto rhs = dynamic_cast<const Literal*>(&e)) {
+        if (e.getKind() == Kind::Literal) {
+            auto rhs = static_cast<const Literal*>(&e);
             return value == rhs->value;
         }
         return false;
     }
+
+    std::vector<optional<Value>> possibleOutputs() const override {
+        return {{ value }};
+    }
     
+    Value getValue() const {
+        return value;
+    }
+
+    mbgl::Value serialize() const override;
+    std::string getOperator() const override { return "literal"; }
+
 private:
     Value value;
 };

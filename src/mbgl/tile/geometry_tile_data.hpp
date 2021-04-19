@@ -22,19 +22,26 @@ class GeometryCoordinates : public std::vector<GeometryCoordinate> {
 public:
     using coordinate_type = int16_t;
 
+    template <class... Args>
+    GeometryCoordinates(Args&&... args) : std::vector<GeometryCoordinate>(std::forward<Args>(args)...) {}
+    GeometryCoordinates(std::initializer_list<GeometryCoordinate> args) : std::vector<GeometryCoordinate>(args) {}
     GeometryCoordinates() = default;
-    GeometryCoordinates(const std::vector<GeometryCoordinate>& v)
-        : std::vector<GeometryCoordinate>(v) {}
-    GeometryCoordinates(std::vector<GeometryCoordinate>&& v)
-        : std::vector<GeometryCoordinate>(std::move(v)) {}
-
-    using std::vector<GeometryCoordinate>::vector;
 };
 
 class GeometryCollection : public std::vector<GeometryCoordinates> {
 public:
     using coordinate_type = int16_t;
-    using std::vector<GeometryCoordinates>::vector;
+    template <class... Args>
+    GeometryCollection(Args&&... args) : std::vector<GeometryCoordinates>(std::forward<Args>(args)...) {}
+    GeometryCollection(std::initializer_list<GeometryCoordinates> args) : std::vector<GeometryCoordinates>(args) {}
+    GeometryCollection(GeometryCollection&&) = default;
+    GeometryCollection& operator=(GeometryCollection&&) = default;
+    GeometryCollection() = default;
+
+    GeometryCollection clone() const { return GeometryCollection(*this); }
+
+private:
+    GeometryCollection(const GeometryCollection&) = default;
 };
 
 class GeometryTileFeature {
@@ -42,9 +49,9 @@ public:
     virtual ~GeometryTileFeature() = default;
     virtual FeatureType getType() const = 0;
     virtual optional<Value> getValue(const std::string& key) const = 0;
-    virtual PropertyMap getProperties() const { return PropertyMap(); }
-    virtual optional<FeatureIdentifier> getID() const { return {}; }
-    virtual GeometryCollection getGeometries() const = 0;
+    virtual const PropertyMap& getProperties() const;
+    virtual FeatureIdentifier getID() const { return NullValue {}; }
+    virtual const GeometryCollection& getGeometries() const;
 };
 
 class GeometryTileLayer {
@@ -75,6 +82,10 @@ std::vector<GeometryCollection> classifyRings(const GeometryCollection&);
 // Truncate polygon to the largest `maxHoles` inner rings by area.
 void limitHoles(GeometryCollection&, uint32_t maxHoles);
 
+Feature::geometry_type convertGeometry(const GeometryTileFeature& geometryTileFeature, const CanonicalTileID& tileID);
+
+GeometryCollection convertGeometry(const Feature::geometry_type& geometryTileFeature, const CanonicalTileID& tileID);
+
 // convert from GeometryTileFeature to Feature (eventually we should eliminate GeometryTileFeature)
 Feature convertFeature(const GeometryTileFeature&, const CanonicalTileID&);
 
@@ -83,35 +94,23 @@ Feature convertFeature(const GeometryTileFeature&, const CanonicalTileID&);
 GeometryCollection fixupPolygons(const GeometryCollection&);
 
 struct ToGeometryCollection {
+    GeometryCollection operator()(const mapbox::geometry::empty&) const {
+        return GeometryCollection();
+    }
     GeometryCollection operator()(const mapbox::geometry::point<int16_t>& geom) const {
         return { { geom } };
     }
     GeometryCollection operator()(const mapbox::geometry::multi_point<int16_t>& geom) const {
-        GeometryCoordinates coordinates;
-        coordinates.reserve(geom.size());
-        for (const auto& point : geom) {
-            coordinates.emplace_back(point);
-        }
-        return { coordinates };
+        return { geom };
     }
     GeometryCollection operator()(const mapbox::geometry::line_string<int16_t>& geom) const {
-        GeometryCoordinates coordinates;
-        coordinates.reserve(geom.size());
-        for (const auto& point : geom) {
-            coordinates.emplace_back(point);
-        }
-        return { coordinates };
+        return { geom };
     }
     GeometryCollection operator()(const mapbox::geometry::multi_line_string<int16_t>& geom) const {
         GeometryCollection collection;
         collection.reserve(geom.size());
         for (const auto& ring : geom) {
-            GeometryCoordinates coordinates;
-            coordinates.reserve(ring.size());
-            for (const auto& point : ring) {
-                coordinates.emplace_back(point);
-            }
-            collection.push_back(std::move(coordinates));
+            collection.emplace_back(ring);
         }
         return collection;
     }
@@ -119,25 +118,15 @@ struct ToGeometryCollection {
         GeometryCollection collection;
         collection.reserve(geom.size());
         for (const auto& ring : geom) {
-            GeometryCoordinates coordinates;
-            coordinates.reserve(ring.size());
-            for (const auto& point : ring) {
-                coordinates.emplace_back(point);
-            }
-            collection.push_back(std::move(coordinates));
+            collection.emplace_back(ring);
         }
         return collection;
     }
     GeometryCollection operator()(const mapbox::geometry::multi_polygon<int16_t>& geom) const {
         GeometryCollection collection;
-        for (auto& polygon : geom) {
-            for (auto& ring : polygon) {
-                GeometryCoordinates coordinates;
-                coordinates.reserve(ring.size());
-                for (auto& point : ring) {
-                    coordinates.emplace_back(point);
-                }
-                collection.push_back(std::move(coordinates));
+        for (const auto& polygon : geom) {
+            for (const auto& ring : polygon) {
+                collection.emplace_back(ring);
             }
         }
         return collection;

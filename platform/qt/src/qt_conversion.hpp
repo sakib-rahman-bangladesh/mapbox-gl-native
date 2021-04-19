@@ -1,7 +1,7 @@
 #pragma once
 
-#include <mbgl/style/conversion.hpp>
 #include <mbgl/style/conversion/geojson.hpp>
+#include <mbgl/style/conversion_impl.hpp>
 #include <mbgl/util/optional.hpp>
 
 #include <QVariant>
@@ -12,6 +12,8 @@
 namespace mbgl {
 namespace style {
 namespace conversion {
+
+std::string convertColor(const QColor &color);
 
 template <>
 class ConversionTraits<QVariant> {
@@ -35,11 +37,9 @@ public:
     static bool isObject(const QVariant& value) {
         return value.canConvert(QVariant::Map)
             || value.type() == QVariant::ByteArray
-    #if QT_VERSION >= 0x050000
-            || QString(value.typeName()) == QStringLiteral("QMapbox::Feature");
-    #else
-            || QString(value.typeName()) == QString("QMapbox::Feature");
-    #endif
+            || QString(value.typeName()) == QStringLiteral("QMapbox::Feature")
+            || value.userType() == qMetaTypeId<QVector<QMapbox::Feature>>()
+            || value.userType() == qMetaTypeId<QList<QMapbox::Feature>>();
     }
 
     static optional<QVariant> objectMember(const QVariant& value, const char* key) {
@@ -98,7 +98,7 @@ public:
         if (value.type() == QVariant::String) {
             return value.toString().toStdString();
         } else if (value.type() == QVariant::Color) {
-            return value.value<QColor>().name().toStdString();
+            return convertColor(value.value<QColor>());
         } else {
             return {};
         }
@@ -110,7 +110,7 @@ public:
         } else if (value.type() == QVariant::String) {
             return { value.toString().toStdString() };
         } else if (value.type() == QVariant::Color) {
-            return { value.value<QColor>().name().toStdString() };
+            return { convertColor(value.value<QColor>()) };
         } else if (value.type() == QVariant::Int) {
             return { int64_t(value.toInt()) };
         } else if (value.canConvert(QVariant::Double)) {
@@ -121,12 +121,12 @@ public:
     }
 
     static optional<GeoJSON> toGeoJSON(const QVariant& value, Error& error) {
-    #if QT_VERSION >= 0x050000
         if (value.typeName() == QStringLiteral("QMapbox::Feature")) {
-    #else
-        if (value.typeName() == QString("QMapbox::Feature")) {
-    #endif
             return GeoJSON { asMapboxGLFeature(value.value<QMapbox::Feature>()) };
+        } else if (value.userType() == qMetaTypeId<QVector<QMapbox::Feature>>()) {
+            return featureCollectionToGeoJSON(value.value<QVector<QMapbox::Feature>>());
+        } else if (value.userType() == qMetaTypeId<QList<QMapbox::Feature>>()) {
+            return featureCollectionToGeoJSON(value.value<QList<QMapbox::Feature>>());
         } else if (value.type() != QVariant::ByteArray) {
             error = { "JSON data must be in QByteArray" };
             return {};
@@ -135,11 +135,27 @@ public:
         QByteArray data = value.toByteArray();
         return parseGeoJSON(std::string(data.constData(), data.size()), error);
     }
+
+private:
+    template<typename T>
+    static GeoJSON featureCollectionToGeoJSON(const T &features) {
+        mapbox::feature::feature_collection<double> collection;
+        collection.reserve(static_cast<std::size_t>(features.size()));
+        for (const auto &feature : features) {
+            collection.push_back(asMapboxGLFeature(feature));
+        }
+        return GeoJSON { std::move(collection) };
+    }
 };
 
 template <class T, class...Args>
 optional<T> convert(const QVariant& value, Error& error, Args&&...args) {
     return convert<T>(Convertible(value), error, std::forward<Args>(args)...);
+}
+
+inline std::string convertColor(const QColor &color) {
+    return QString::asprintf("rgba(%d,%d,%d,%lf)",
+        color.red(), color.green(), color.blue(), color.alphaF()).toStdString();
 }
 
 } // namespace conversion

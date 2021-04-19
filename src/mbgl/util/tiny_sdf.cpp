@@ -35,7 +35,7 @@ void edt1d(std::vector<double>& f,
 
     for (uint32_t q = 0, k = 0; q < n; q++) {
         while (z[k + 1] < q) k++;
-        d[q] = (q - v[k]) * (q - v[k]) + f[v[k]];
+        d[q] = (static_cast<double>(q) - v[k]) * (static_cast<double>(q) - v[k]) + f[v[k]];
     }
 }
 
@@ -95,7 +95,7 @@ AlphaImage transformRasterToSDF(const AlphaImage& rasterInput, double radius, do
 
     for (uint32_t i = 0; i < size; i++) {
         double distance = gridOuter[i] - gridInner[i];
-        sdf.data[i] = std::max(0l, std::min(255l, std::lround(255.0 - 255.0 * (distance / radius + cutoff))));
+        sdf.data[i] = std::max(0l, std::min(255l, ::lround(255.0 - 255.0 * (distance / radius + cutoff))));
     }
 
     return sdf;

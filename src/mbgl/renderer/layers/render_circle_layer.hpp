@@ -6,35 +6,28 @@
 
 namespace mbgl {
 
-class RenderCircleLayer: public RenderLayer {
+class RenderCircleLayer final : public RenderLayer {
 public:
-    RenderCircleLayer(Immutable<style::CircleLayer::Impl>);
+    explicit RenderCircleLayer(Immutable<style::CircleLayer::Impl>);
     ~RenderCircleLayer() final = default;
 
+private:
     void transition(const TransitionParameters&) override;
     void evaluate(const PropertyEvaluationParameters&) override;
     bool hasTransition() const override;
-    void render(PaintParameters&, RenderSource*) override;
+    bool hasCrossfade() const override;
+    void render(PaintParameters&) override;
 
-    bool queryIntersectsFeature(
-            const GeometryCoordinates&,
-            const GeometryTileFeature&,
-            const float,
-            const float,
-            const float) const override;
-
-    std::unique_ptr<Bucket> createBucket(const BucketParameters&, const std::vector<const RenderLayer*>&) const override;
+    bool queryIntersectsFeature(const GeometryCoordinates&,
+                                const GeometryTileFeature&,
+                                float,
+                                const TransformState&,
+                                float,
+                                const mat4&,
+                                const FeatureState&) const override;
 
     // Paint properties
     style::CirclePaintProperties::Unevaluated unevaluated;
-    style::CirclePaintProperties::PossiblyEvaluated evaluated;
-
-    const style::CircleLayer::Impl& impl() const;
 };
-
-template <>
-inline bool RenderLayer::is<RenderCircleLayer>() const {
-    return type == style::LayerType::Circle;
-}
 
 } // namespace mbgl

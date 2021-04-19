@@ -1,4 +1,5 @@
 #include <mbgl/storage/local_file_source.hpp>
+#include <mbgl/storage/resource.hpp>
 #include <mbgl/util/platform.hpp>
 #include <mbgl/util/run_loop.hpp>
 
@@ -19,6 +20,16 @@ std::string toAbsoluteURL(const std::string& fileName) {
 } // namespace
 
 using namespace mbgl;
+
+TEST(LocalFileSource, AcceptsURL) {
+    LocalFileSource fs;
+    EXPECT_TRUE(fs.canRequest(Resource::style("file://empty")));
+    EXPECT_TRUE(fs.canRequest(Resource::style("file:///test")));
+    EXPECT_FALSE(fs.canRequest(Resource::style("flie://foo")));
+    EXPECT_FALSE(fs.canRequest(Resource::style("file:")));
+    EXPECT_FALSE(fs.canRequest(Resource::style("style.json")));
+    EXPECT_FALSE(fs.canRequest(Resource::style("")));
+}
 
 TEST(LocalFileSource, EmptyFile) {
     util::RunLoop loop;
@@ -63,6 +74,23 @@ TEST(LocalFileSource, NonExistentFile) {
         EXPECT_EQ(Response::Error::Reason::NotFound, res.error->reason);
         ASSERT_FALSE(res.data.get());
         // Do not assert on platform-specific error message.
+        loop.stop();
+    });
+
+    loop.run();
+}
+
+TEST(LocalFileSource, InvalidURL) {
+    util::RunLoop loop;
+
+    LocalFileSource fs;
+
+    std::unique_ptr<AsyncRequest> req = fs.request({ Resource::Unknown, "test://wrong-scheme" }, [&](Response res) {
+        req.reset();
+        ASSERT_NE(nullptr, res.error);
+        EXPECT_EQ(Response::Error::Reason::Other, res.error->reason);
+        EXPECT_EQ("Invalid file URL", res.error->message);
+        ASSERT_FALSE(res.data.get());
         loop.stop();
     });
 

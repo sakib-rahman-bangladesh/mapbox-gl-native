@@ -4,6 +4,7 @@
 #include <mbgl/style/source.hpp>
 #include <mbgl/style/light.hpp>
 
+#include <mbgl/util/constants.hpp>
 #include <mbgl/util/rapidjson.hpp>
 #include <mbgl/util/font_stack.hpp>
 #include <mbgl/util/geo.hpp>
@@ -32,7 +33,7 @@ public:
     std::vector<std::unique_ptr<Source>> sources;
     std::vector<std::unique_ptr<Layer>> layers;
 
-    TransitionOptions transition;
+    TransitionOptions transition { { util::DEFAULT_TRANSITION_DURATION } };
     Light light;
 
     std::string name;
@@ -42,7 +43,7 @@ public:
     double pitch = 0;
 
     // Statically evaluate layer properties to determine what font stacks are used.
-    std::vector<FontStack> fontStacks() const;
+    std::set<FontStack> fontStacks() const;
 
 private:
     void parseTransition(const JSValue&);
@@ -51,7 +52,6 @@ private:
     void parseLayers(const JSValue&);
     void parseLayer(const std::string& id, const JSValue&, std::unique_ptr<Layer>&);
 
-    std::unordered_map<std::string, const Source*> sourcesMap;
     std::unordered_map<std::string, std::pair<const JSValue&, std::unique_ptr<Layer>>> layersMap;
 
     // Store a stack of layer IDs we're parsing right now. This is to prevent reference cycles.

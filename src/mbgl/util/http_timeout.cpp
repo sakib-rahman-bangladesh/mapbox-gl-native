@@ -1,6 +1,7 @@
 #include <mbgl/util/http_timeout.hpp>
 #include <mbgl/util/constants.hpp>
 
+#include <algorithm>
 #include <cassert>
 
 namespace mbgl {
@@ -31,11 +32,11 @@ Duration errorRetryTimeout(Response::Error::Reason failedRequestReason, uint32_t
 Duration expirationTimeout(optional<Timestamp> expires, uint32_t expiredRequests) {
     if (expiredRequests) {
         return Seconds(1u << std::min(expiredRequests - 1, 31u));
-    } else if (expires) {
-        return std::max(Seconds::zero(), *expires - util::now());
-    } else {
-        return Duration::max();
     }
+    if (expires) {
+        return std::max(Seconds::zero(), *expires - util::now());
+    }
+    return Duration::max();
 }
 
 } // namespace http

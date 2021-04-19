@@ -1,3 +1,5 @@
+// clang-format off
+
 // This file is generated. Do not edit.
 
 #pragma once
@@ -5,8 +7,6 @@
 #include <mbgl/style/layer.hpp>
 #include <mbgl/style/filter.hpp>
 #include <mbgl/style/property_value.hpp>
-#include <mbgl/style/data_driven_property_value.hpp>
-
 #include <mbgl/util/color.hpp>
 
 namespace mbgl {
@@ -14,37 +14,30 @@ namespace style {
 
 class TransitionOptions;
 
-class BackgroundLayer : public Layer {
+class BackgroundLayer final : public Layer {
 public:
     BackgroundLayer(const std::string& layerID);
-    ~BackgroundLayer() final;
-
-    // Visibility
-    void setVisibility(VisibilityType) final;
-
-    // Zoom range
-    void setMinZoom(float) final;
-    void setMaxZoom(float) final;
+    ~BackgroundLayer() override;
 
     // Paint properties
 
     static PropertyValue<Color> getDefaultBackgroundColor();
-    PropertyValue<Color> getBackgroundColor() const;
-    void setBackgroundColor(PropertyValue<Color>);
+    const PropertyValue<Color>& getBackgroundColor() const;
+    void setBackgroundColor(const PropertyValue<Color>&);
     void setBackgroundColorTransition(const TransitionOptions&);
     TransitionOptions getBackgroundColorTransition() const;
 
-    static PropertyValue<std::string> getDefaultBackgroundPattern();
-    PropertyValue<std::string> getBackgroundPattern() const;
-    void setBackgroundPattern(PropertyValue<std::string>);
-    void setBackgroundPatternTransition(const TransitionOptions&);
-    TransitionOptions getBackgroundPatternTransition() const;
-
     static PropertyValue<float> getDefaultBackgroundOpacity();
-    PropertyValue<float> getBackgroundOpacity() const;
-    void setBackgroundOpacity(PropertyValue<float>);
+    const PropertyValue<float>& getBackgroundOpacity() const;
+    void setBackgroundOpacity(const PropertyValue<float>&);
     void setBackgroundOpacityTransition(const TransitionOptions&);
     TransitionOptions getBackgroundOpacityTransition() const;
+
+    static PropertyValue<expression::Image> getDefaultBackgroundPattern();
+    const PropertyValue<expression::Image>& getBackgroundPattern() const;
+    void setBackgroundPattern(const PropertyValue<expression::Image>&);
+    void setBackgroundPatternTransition(const TransitionOptions&);
+    TransitionOptions getBackgroundPatternTransition() const;
 
     // Private implementation
 
@@ -54,12 +47,18 @@ public:
     Mutable<Impl> mutableImpl() const;
     BackgroundLayer(Immutable<Impl>);
     std::unique_ptr<Layer> cloneRef(const std::string& id) const final;
-};
 
-template <>
-inline bool Layer::is<BackgroundLayer>() const {
-    return getType() == LayerType::Background;
-}
+protected:
+    // Dynamic properties
+    optional<conversion::Error> setPropertyInternal(const std::string& name, const conversion::Convertible& value) final;
+
+    StyleProperty getProperty(const std::string& name) const final;
+    Value serialize() const final;
+
+    Mutable<Layer::Impl> mutableBaseImpl() const final;
+};
 
 } // namespace style
 } // namespace mbgl
+
+// clang-format on

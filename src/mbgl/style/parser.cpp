@@ -1,13 +1,12 @@
 #include <mbgl/style/parser.hpp>
 #include <mbgl/style/layer_impl.hpp>
-#include <mbgl/style/layers/symbol_layer.hpp>
 #include <mbgl/style/rapidjson_conversion.hpp>
-#include <mbgl/style/conversion.hpp>
 #include <mbgl/style/conversion/coordinate.hpp>
 #include <mbgl/style/conversion/source.hpp>
 #include <mbgl/style/conversion/layer.hpp>
 #include <mbgl/style/conversion/light.hpp>
 #include <mbgl/style/conversion/transition_options.hpp>
+#include <mbgl/style/conversion_impl.hpp>
 
 #include <mbgl/util/logging.hpp>
 #include <mbgl/util/string.hpp>
@@ -19,7 +18,6 @@
 
 #include <algorithm>
 #include <set>
-#include <sstream>
 
 namespace mbgl {
 namespace style {
@@ -31,11 +29,7 @@ StyleParseResult Parser::parse(const std::string& json) {
     document.Parse<0>(json.c_str());
 
     if (document.HasParseError()) {
-        std::stringstream message;
-        message <<  document.GetErrorOffset() << " - "
-            << rapidjson::GetParseError_En(document.GetParseError());
-
-        return std::make_exception_ptr(std::runtime_error(message.str()));
+        return std::make_exception_ptr(std::runtime_error(formatJSONParseError(document)));
     }
 
     if (!document.IsObject()) {
@@ -119,6 +113,9 @@ StyleParseResult Parser::parse(const std::string& json) {
         }
     }
 
+    // Call for side effect of logging warnings for invalid values.
+    fontStacks();
+
     return nullptr;
 }
 
@@ -141,7 +138,7 @@ void Parser::parseLight(const JSValue& value) {
         return;
     }
 
-    light = std::move(*converted);
+    light = *converted;
 }
 
 void Parser::parseSources(const JSValue& value) {
@@ -161,7 +158,6 @@ void Parser::parseSources(const JSValue& value) {
             continue;
         }
 
-        sourcesMap.emplace(id, (*source).get());
         sources.emplace_back(std::move(*source));
     }
 }
@@ -270,29 +266,13 @@ void Parser::parseLayer(const std::string& id, const JSValue& value, std::unique
     }
 }
 
-std::vector<FontStack> Parser::fontStacks() const {
-    std::set<FontStack> optional;
-
+std::set<FontStack> Parser::fontStacks() const {
+    std::vector<Immutable<Layer::Impl>> impls;
+    impls.reserve(layers.size());
     for (const auto& layer : layers) {
-        if (layer->is<SymbolLayer>()) {
-            PropertyValue<FontStack> textFont = layer->as<SymbolLayer>()->getTextFont();
-            if (textFont.isUndefined()) {
-                optional.insert({"Open Sans Regular", "Arial Unicode MS Regular"});
-            } else if (textFont.isConstant()) {
-                optional.insert(textFont.asConstant());
-            } else if (textFont.isCameraFunction()) {
-                textFont.asCameraFunction().stops.match(
-                    [&] (const auto& stops) {
-                        for (const auto& stop : stops.stops) {
-                            optional.insert(stop.second);
-                        }
-                    }
-                );
-            }
-        }
+        impls.emplace_back(layer->baseImpl);
     }
-
-    return std::vector<FontStack>(optional.begin(), optional.end());
+    return mbgl::fontStacks(impls);
 }
 
 } // namespace style

@@ -4,12 +4,9 @@
 #include <mbgl/util/default_styles.hpp>
 #include <mbgl/util/geometry.hpp>
 #include <mbgl/util/traits.hpp>
+#include <mbgl/util/projection.hpp>
 
-#if QT_VERSION >= 0x050000
 #include <QOpenGLContext>
-#else
-#include <QGLContext>
-#endif
 
 // mbgl::NetworkStatus::Status
 static_assert(mbgl::underlying_type(QMapbox::Online) == mbgl::underlying_type(mbgl::NetworkStatus::Status::Online), "error");
@@ -24,7 +21,7 @@ namespace QMapbox {
 
 /*!
     \namespace QMapbox
-    \inmodule Mapbox Qt SDK
+    \inmodule Mapbox Maps SDK for Qt
 
     Contains miscellaneous Mapbox bindings used throughout QMapboxGL.
 */
@@ -53,28 +50,28 @@ namespace QMapbox {
 /*!
     \typedef QMapbox::Coordinates
 
-    Alias for QList<QMapbox::Coordinate>.
+    Alias for QVector<QMapbox::Coordinate>.
     A list of QMapbox::Coordinate objects.
 */
 
 /*!
     \typedef QMapbox::CoordinatesCollection
 
-    Alias for QList<QMapbox::Coordinates>.
+    Alias for QVector<QMapbox::Coordinates>.
     A list of QMapbox::Coordinates objects.
 */
 
 /*!
     \typedef QMapbox::CoordinatesCollections
 
-    Alias for QList<QMapbox::CoordinatesCollection>.
+    Alias for QVector<QMapbox::CoordinatesCollection>.
     A list of QMapbox::CoordinatesCollection objects.
 */
 
 /*!
     \class QMapbox::Feature
 
-    \inmodule Mapbox Qt SDK
+    \inmodule Mapbox Maps SDK for Qt
 
     Represents \l {https://www.mapbox.com/help/define-features/}{map features}
     via its \a type (PointType, LineStringType or PolygonType), \a geometry, \a
@@ -94,7 +91,7 @@ namespace QMapbox {
 /*!
     \class QMapbox::ShapeAnnotationGeometry
 
-    \inmodule Mapbox Qt SDK
+    \inmodule Mapbox Maps SDK for Qt
 
     Represents a shape annotation geometry.
 */
@@ -113,7 +110,7 @@ namespace QMapbox {
 /*!
     \class QMapbox::SymbolAnnotation
 
-    \inmodule Mapbox Qt SDK
+    \inmodule Mapbox Maps SDK for Qt
 
     A symbol annotation comprises of its geometry and an icon identifier.
 */
@@ -121,7 +118,7 @@ namespace QMapbox {
 /*!
     \class QMapbox::LineAnnotation
 
-    \inmodule Mapbox Qt SDK
+    \inmodule Mapbox Maps SDK for Qt
 
     Represents a line annotation object, along with its properties.
 
@@ -131,7 +128,7 @@ namespace QMapbox {
 /*!
     \class QMapbox::FillAnnotation
 
-    \inmodule Mapbox Qt SDK
+    \inmodule Mapbox Maps SDK for Qt
 
     Represents a fill annotation object, along with its properties.
 
@@ -154,31 +151,13 @@ namespace QMapbox {
 /*!
     \typedef QMapbox::AnnotationIDs
 
-    Alias for QList<quint32> representing a container of annotation identifiers.
+    Alias for QVector<quint32> representing a container of annotation identifiers.
 */
 
 /*!
-    \typedef QMapbox::CustomLayerDeinitializeFunction
+    \class QMapbox::CustomLayerHostInterface
 
-    Represents a callback to be called when destroying a custom layer.
-
-    \warning This is used for delegating the rendering of a layer to the user of
-    this API and is not officially supported. Use at your own risk.
-*/
-
-/*!
-    \typedef QMapbox::CustomLayerInitializeFunction
-
-    Represents a callback to be called when initializing a custom layer.
-
-    \warning This is used for delegating the rendering of a layer to the user of
-    this API and is not officially supported. Use at your own risk.
-*/
-
-/*!
-    \typedef QMapbox::CustomLayerRenderFunction
-
-    Represents a callback to be called on each render pass for a custom layer.
+    Represents a host interface to be implemented for rendering custom layers.
 
     \warning This is used for delegating the rendering of a layer to the user of
     this API and is not officially supported. Use at your own risk.
@@ -195,7 +174,7 @@ namespace QMapbox {
 
 /*!
     \class QMapbox::CustomLayerRenderParameters
-    \inmodule Mapbox Qt SDK
+    \inmodule Mapbox Maps SDK for Qt
 
     QMapbox::CustomLayerRenderParameters provides the data passed on each render
     pass for a custom layer.
@@ -206,7 +185,7 @@ namespace QMapbox {
 
     Returns the current QMapbox::NetworkMode.
 */
-Q_DECL_EXPORT NetworkMode networkMode()
+NetworkMode networkMode()
 {
     return static_cast<NetworkMode>(mbgl::NetworkStatus::Get());
 }
@@ -219,20 +198,20 @@ Q_DECL_EXPORT NetworkMode networkMode()
     File source requests uses the available network when \a mode is set to \b
     Online, otherwise scoped to the local cache.
 */
-Q_DECL_EXPORT void setNetworkMode(NetworkMode mode)
+void setNetworkMode(NetworkMode mode)
 {
     mbgl::NetworkStatus::Set(static_cast<mbgl::NetworkStatus::Status>(mode));
 }
 
 /*!
-    \fn QList<QPair<QString, QString> >& QMapbox::defaultStyles()
+    \fn QVector<QPair<QString, QString> >& QMapbox::defaultStyles()
 
     Returns a list containing a pair of string objects, representing the style
     URL and name, respectively.
 */
-Q_DECL_EXPORT QList<QPair<QString, QString> >& defaultStyles()
+QVector<QPair<QString, QString> >& defaultStyles()
 {
-    static QList<QPair<QString, QString>> styles;
+    static QVector<QPair<QString, QString>> styles;
 
     if (styles.isEmpty()) {
         for (auto style : mbgl::util::default_styles::orderedStyles) {
@@ -242,6 +221,32 @@ Q_DECL_EXPORT QList<QPair<QString, QString> >& defaultStyles()
     }
 
     return styles;
+}
+
+/*!
+    Returns the amount of meters per pixel from a given \a latitude and \a zoom.
+*/
+double metersPerPixelAtLatitude(double latitude, double zoom)
+{
+    return mbgl::Projection::getMetersPerPixelAtLatitude(latitude, zoom);
+}
+
+/*!
+    Return the projected meters for a given \a coordinate object.
+*/
+ProjectedMeters projectedMetersForCoordinate(const Coordinate &coordinate)
+{
+    auto projectedMeters = mbgl::Projection::projectedMetersForLatLng(mbgl::LatLng { coordinate.first, coordinate.second });
+    return QMapbox::ProjectedMeters(projectedMeters.northing(), projectedMeters.easting());
+}
+
+/*!
+    Returns the coordinate for a given \a projectedMeters object.
+*/
+Coordinate coordinateForProjectedMeters(const ProjectedMeters &projectedMeters)
+{
+    auto latLng = mbgl::Projection::latLngForProjectedMeters(mbgl::ProjectedMeters { projectedMeters.first, projectedMeters.second });
+    return QMapbox::Coordinate(latLng.latitude(), latLng.longitude());
 }
 
 } // namespace QMapbox

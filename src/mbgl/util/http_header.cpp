@@ -1,15 +1,11 @@
 #include <mbgl/util/http_header.hpp>
 
+#include <mbgl/util/chrono.hpp>
 #include <mbgl/util/string.hpp>
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunknown-pragmas"
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-#pragma GCC diagnostic ignored "-Wshadow"
 #include <boost/spirit/include/qi.hpp>
 #include <boost/spirit/include/phoenix_core.hpp>
 #include <boost/spirit/include/phoenix_operator.hpp>
-#pragma GCC diagnostic pop
 
 namespace mbgl {
 namespace http {
@@ -36,7 +32,7 @@ optional<Timestamp> parseRetryHeaders(const optional<std::string>& retryAfter,
     if (retryAfter) {
         try {
             auto secs = std::chrono::seconds(std::stoi(*retryAfter));
-            return std::chrono::time_point_cast<Seconds>(std::chrono::system_clock::now() + secs);
+            return std::chrono::time_point_cast<Seconds>(util::now() + secs);
         } catch (...) {
             return util::parseTimestamp((*retryAfter).c_str());
         }

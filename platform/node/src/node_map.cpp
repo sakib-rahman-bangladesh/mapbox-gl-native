@@ -3,24 +3,33 @@
 #include "node_feature.hpp"
 #include "node_conversion.hpp"
 
-#include <mbgl/util/exception.hpp>
 #include <mbgl/renderer/renderer.hpp>
-#include <mbgl/gl/headless_frontend.hpp>
+#include <mbgl/gfx/headless_frontend.hpp>
 #include <mbgl/style/conversion/source.hpp>
 #include <mbgl/style/conversion/layer.hpp>
 #include <mbgl/style/conversion/filter.hpp>
+#include <mbgl/style/conversion/light.hpp>
 
 #include <mbgl/style/layers/background_layer.hpp>
 #include <mbgl/style/layers/circle_layer.hpp>
 #include <mbgl/style/layers/fill_layer.hpp>
 #include <mbgl/style/layers/fill_extrusion_layer.hpp>
+#include <mbgl/style/layers/heatmap_layer.hpp>
+#include <mbgl/style/layers/hillshade_layer.hpp>
 #include <mbgl/style/layers/line_layer.hpp>
 #include <mbgl/style/layers/raster_layer.hpp>
 #include <mbgl/style/layers/symbol_layer.hpp>
 
-#include <mbgl/style/style.hpp>
-#include <mbgl/style/image.hpp>
+#include <mbgl/map/map.hpp>
 #include <mbgl/map/map_observer.hpp>
+#include <mbgl/storage/file_source_manager.hpp>
+#include <mbgl/storage/resource_options.hpp>
+#include <mbgl/style/image.hpp>
+#include <mbgl/style/light.hpp>
+#include <mbgl/style/style.hpp>
+#include <mbgl/util/async_request.hpp>
+#include <mbgl/util/exception.hpp>
+#include <mbgl/util/logging.hpp>
 #include <mbgl/util/premultiply.hpp>
 
 #include <unistd.h>
@@ -30,6 +39,7 @@ namespace node_mbgl {
 struct NodeMap::RenderOptions {
     double zoom = 0;
     double bearing = 0;
+    mbgl::style::Light light;
     double pitch = 0;
     double latitude = 0;
     double longitude = 0;
@@ -42,16 +52,37 @@ struct NodeMap::RenderOptions {
 };
 
 Nan::Persistent<v8::Function> NodeMap::constructor;
+Nan::Persistent<v8::Object> NodeMap::parseError;
 
 static const char* releasedMessage() {
     return "Map resources have already been released";
 }
 
-void NodeMapObserver::onDidFailLoadingMap(std::exception_ptr error) {
-    std::rethrow_exception(error);
+void NodeMapObserver::onDidFailLoadingMap(mbgl::MapLoadError error, const std::string& description) {
+    switch (error) {
+        case mbgl::MapLoadError::StyleParseError:
+            Nan::ThrowError(NodeMap::ParseError(description.c_str()));
+            break;
+        default:
+            Nan::ThrowError(description.c_str());
+    }
 }
 
 void NodeMap::Init(v8::Local<v8::Object> target) {
+    // Define a custom error class for parse errors
+    auto script = Nan::New<v8::UnboundScript>(Nan::New(R"JS(
+class ParseError extends Error {
+  constructor(...params) {
+    super(...params);
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, ParseError);
+    }
+  }
+}
+ParseError)JS").ToLocalChecked()).ToLocalChecked();
+    parseError.Reset(Nan::To<v8::Object>(Nan::RunScript(script).ToLocalChecked()).ToLocalChecked());
+    Nan::Set(target, Nan::New("ParseError").ToLocalChecked(), Nan::New(parseError));
+
     v8::Local<v8::FunctionTemplate> tpl = Nan::New<v8::FunctionTemplate>(New);
 
     tpl->SetClassName(Nan::New("Map").ToLocalChecked());
@@ -69,16 +100,21 @@ void NodeMap::Init(v8::Local<v8::Object> target) {
     Nan::SetPrototypeMethod(tpl, "removeLayer", RemoveLayer);
     Nan::SetPrototypeMethod(tpl, "addImage", AddImage);
     Nan::SetPrototypeMethod(tpl, "removeImage", RemoveImage);
-    Nan::SetPrototypeMethod(tpl, "setLayoutProperty", SetLayoutProperty);
-    Nan::SetPrototypeMethod(tpl, "setPaintProperty", SetPaintProperty);
+    Nan::SetPrototypeMethod(tpl, "setLayerZoomRange", SetLayerZoomRange);
+    Nan::SetPrototypeMethod(tpl, "setLayoutProperty", SetLayerProperty);
+    Nan::SetPrototypeMethod(tpl, "setPaintProperty", SetLayerProperty);
     Nan::SetPrototypeMethod(tpl, "setFilter", SetFilter);
     Nan::SetPrototypeMethod(tpl, "setCenter", SetCenter);
     Nan::SetPrototypeMethod(tpl, "setZoom", SetZoom);
     Nan::SetPrototypeMethod(tpl, "setBearing", SetBearing);
     Nan::SetPrototypeMethod(tpl, "setPitch", SetPitch);
+    Nan::SetPrototypeMethod(tpl, "setLight", SetLight);
     Nan::SetPrototypeMethod(tpl, "setAxonometric", SetAxonometric);
     Nan::SetPrototypeMethod(tpl, "setXSkew", SetXSkew);
     Nan::SetPrototypeMethod(tpl, "setYSkew", SetYSkew);
+    Nan::SetPrototypeMethod(tpl, "setFeatureState", SetFeatureState);
+    Nan::SetPrototypeMethod(tpl, "getFeatureState", GetFeatureState);
+    Nan::SetPrototypeMethod(tpl, "removeFeatureState", RemoveFeatureState);
 
     Nan::SetPrototypeMethod(tpl, "dumpDebugLogs", DumpDebugLogs);
     Nan::SetPrototypeMethod(tpl, "queryRenderedFeatures", QueryRenderedFeatures);
@@ -156,6 +192,12 @@ void NodeMap::New(const Nan::FunctionCallbackInfo<v8::Value>& info) {
 
     info.This()->SetInternalField(1, options);
 
+    mbgl::FileSourceManager::get()->registerFileSourceFactory(
+        mbgl::FileSourceType::ResourceLoader, [](const mbgl::ResourceOptions& resourceOptions) {
+            return std::make_unique<node_mbgl::NodeFileSource>(
+                reinterpret_cast<node_mbgl::NodeMap*>(resourceOptions.platformContext()));
+        });
+
     try {
         auto nodeMap = new NodeMap(options);
         nodeMap->Wrap(info.This());
@@ -209,6 +251,8 @@ void NodeMap::Load(const Nan::FunctionCallbackInfo<v8::Value>& info) {
 
     try {
         nodeMap->map->getStyle().loadJSON(style);
+    } catch (const mbgl::util::StyleParseException& ex) {
+        return Nan::ThrowError(ParseError(ex.what()));
     } catch (const std::exception &ex) {
         return Nan::ThrowError(ex.what());
     }
@@ -263,6 +307,16 @@ NodeMap::RenderOptions NodeMap::ParseOptions(v8::Local<v8::Object> obj) {
 
     if (Nan::Has(obj, Nan::New("pitch").ToLocalChecked()).FromJust()) {
         options.pitch = Nan::Get(obj, Nan::New("pitch").ToLocalChecked()).ToLocalChecked()->NumberValue();
+    }
+
+    if (Nan::Has(obj, Nan::New("light").ToLocalChecked()).FromJust()) {
+        auto lightObj = Nan::Get(obj, Nan::New("light").ToLocalChecked()).ToLocalChecked();
+        mbgl::style::conversion::Error conversionError;
+        if (auto light = mbgl::style::conversion::convert<mbgl::style::Light>(lightObj, conversionError)) {
+            options.light = *light;
+        } else {
+            throw std::move(conversionError);
+        }
     }
 
     if (Nan::Has(obj, Nan::New("axonometric").ToLocalChecked()).FromJust()) {
@@ -336,6 +390,18 @@ NodeMap::RenderOptions NodeMap::ParseOptions(v8::Local<v8::Object> obj) {
     return options;
 }
 
+class RenderRequest : public Nan::AsyncResource {
+public:
+    explicit RenderRequest(v8::Local<v8::Function> callback_) : AsyncResource("mbgl:RenderRequest") {
+        callback.Reset(callback_);
+    }
+    ~RenderRequest() {
+        callback.Reset();
+    }
+
+    Nan::Persistent<v8::Function> callback;
+};
+
 /**
  * Render an image from the currently-loaded style
  *
@@ -368,50 +434,48 @@ void NodeMap::Render(const Nan::FunctionCallbackInfo<v8::Value>& info) {
         return Nan::ThrowTypeError("Style is not loaded");
     }
 
-    if (nodeMap->callback) {
-        return Nan::ThrowError("Map is currently rendering an image");
+    if (nodeMap->req) {
+        return Nan::ThrowError("Map is currently processing a RenderRequest");
     }
 
-    auto options = ParseOptions(Nan::To<v8::Object>(info[0]).ToLocalChecked());
-
-    assert(!nodeMap->callback);
-    assert(!nodeMap->image.data);
-    nodeMap->callback = std::make_unique<Nan::Callback>(info[1].As<v8::Function>());
-
     try {
-        nodeMap->startRender(std::move(options));
-    } catch (mbgl::util::Exception &ex) {
+        auto options = ParseOptions(Nan::To<v8::Object>(info[0]).ToLocalChecked());
+        assert(!nodeMap->req);
+        assert(!nodeMap->image.data);
+        nodeMap->req = std::make_unique<RenderRequest>(Nan::To<v8::Function>(info[1]).ToLocalChecked());
+
+        nodeMap->startRender(options);
+    } catch (const mbgl::style::conversion::Error& err) {
+        return Nan::ThrowTypeError(err.message.c_str());
+    } catch (const mbgl::util::StyleParseException& ex) {
+        return Nan::ThrowError(ParseError(ex.what()));
+    } catch (const mbgl::util::Exception &ex) {
         return Nan::ThrowError(ex.what());
     }
 
     info.GetReturnValue().SetUndefined();
 }
 
-void NodeMap::startRender(NodeMap::RenderOptions options) {
+void NodeMap::startRender(const NodeMap::RenderOptions& options) {
     frontend->setSize(options.size);
     map->setSize(options.size);
 
     mbgl::CameraOptions camera;
     camera.center = mbgl::LatLng { options.latitude, options.longitude };
     camera.zoom = options.zoom;
-    camera.angle = -options.bearing * mbgl::util::DEG2RAD;
-    camera.pitch = options.pitch * mbgl::util::DEG2RAD;
+    camera.bearing = options.bearing;
+    camera.pitch = options.pitch;
 
-    if (map->getAxonometric() != options.axonometric) {
-        map->setAxonometric(options.axonometric);
-    }
+    auto projectionOptions = mbgl::ProjectionMode()
+        .withAxonometric(options.axonometric)
+        .withXSkew(options.xSkew)
+        .withYSkew(options.ySkew);
 
-    if (map->getXSkew() != options.xSkew) {
-        map->setXSkew(options.xSkew);
-    }
+    map->setProjectionMode(projectionOptions);
 
-    if (map->getYSkew() != options.ySkew) {
-        map->setYSkew(options.ySkew);
-    }
-
-    map->renderStill(camera, options.debugOptions, [this](const std::exception_ptr eptr) {
+    map->renderStill(camera, options.debugOptions, [this](const std::exception_ptr& eptr) {
         if (eptr) {
-            error = std::move(eptr);
+            error = eptr;
             uv_async_send(async);
         } else {
             assert(!image.data);
@@ -429,43 +493,52 @@ void NodeMap::startRender(NodeMap::RenderOptions options) {
     uv_ref(reinterpret_cast<uv_handle_t *>(async));
 }
 
+v8::Local<v8::Value> NodeMap::ParseError(const char* msg) {
+    v8::Local<v8::Value> argv[] = { Nan::New(msg).ToLocalChecked() };
+    return Nan::CallAsConstructor(Nan::New(parseError), 1, argv).ToLocalChecked();
+}
+
 void NodeMap::renderFinished() {
+    assert(req);
+
     Nan::HandleScope scope;
 
     // We're done with this render call, so we're unrefing so that the loop could close.
     uv_unref(reinterpret_cast<uv_handle_t *>(async));
 
-    // There is no render pending anymore, we the GC could now delete this object if it went out
-    // of scope.
-    Unref();
-
     // Move the callback and image out of the way so that the callback can start a new render call.
-    auto cb = std::move(callback);
+    auto request = std::move(req);
     auto img = std::move(image);
-    assert(cb);
+    assert(request);
 
     // These have to be empty to be prepared for the next render call.
-    assert(!callback);
+    assert(!req);
     assert(!image.data);
 
+    v8::Local<v8::Function> callback = Nan::New(request->callback);
+    v8::Local<v8::Object> target = Nan::New<v8::Object>();
+
     if (error) {
-        std::string errorMessage;
+        v8::Local<v8::Value> err;
 
         try {
             std::rethrow_exception(error);
+            assert(false);
+        } catch (const mbgl::util::StyleParseException& ex) {
+            err = ParseError(ex.what());
         } catch (const std::exception& ex) {
-            errorMessage = ex.what();
+            err = Nan::Error(ex.what());
         }
 
         v8::Local<v8::Value> argv[] = {
-            Nan::Error(errorMessage.c_str())
+            err
         };
 
         // This must be empty to be prepared for the next render call.
         error = nullptr;
         assert(!error);
 
-        cb->Call(1, argv);
+        request->runInAsyncScope(target, callback, 1, argv);
     } else if (img.data) {
         v8::Local<v8::Object> pixels = Nan::NewBuffer(
             reinterpret_cast<char *>(img.data.get()), img.bytes(),
@@ -475,19 +548,25 @@ void NodeMap::renderFinished() {
             },
             img.data.get()
         ).ToLocalChecked();
-        img.data.release();
+        if (!pixels.IsEmpty()) {
+            img.data.release();
+        }
 
         v8::Local<v8::Value> argv[] = {
             Nan::Null(),
             pixels
         };
-        cb->Call(2, argv);
+        request->runInAsyncScope(target, callback, 2, argv);
     } else {
         v8::Local<v8::Value> argv[] = {
             Nan::Error("Didn't get an image")
         };
-        cb->Call(1, argv);
+        request->runInAsyncScope(target, callback, 1, argv);
     }
+
+    // There is no render pending anymore, we the GC could now delete this object if it went out
+    // of scope.
+    Unref();
 }
 
 /**
@@ -529,7 +608,7 @@ void NodeMap::Cancel(const Nan::FunctionCallbackInfo<v8::Value>& info) {
     auto nodeMap = Nan::ObjectWrap::Unwrap<NodeMap>(info.Holder());
 
     if (!nodeMap->map) return Nan::ThrowError(releasedMessage());
-    if (!nodeMap->callback) return Nan::ThrowError("No render in progress");
+    if (!nodeMap->req) return Nan::ThrowError("No render in progress");
 
     try {
         nodeMap->cancel();
@@ -546,9 +625,24 @@ void NodeMap::cancel() {
     // Reset map explicitly as it resets the renderer frontend
     map.reset();
 
-    frontend = std::make_unique<mbgl::HeadlessFrontend>(mbgl::Size{ 256, 256 }, pixelRatio, *this, threadpool);
-    map = std::make_unique<mbgl::Map>(*frontend, mapObserver, frontend->getSize(), pixelRatio,
-                                      *this, threadpool, mode);
+    // Remove the existing async handle to flush any scheduled calls to renderFinished.
+    uv_unref(reinterpret_cast<uv_handle_t *>(async));
+    uv_close(reinterpret_cast<uv_handle_t *>(async), [] (uv_handle_t *h) {
+        delete reinterpret_cast<uv_async_t *>(h);
+    });
+    async = new uv_async_t;
+    async->data = this;
+    uv_async_init(uv_default_loop(), async, [](uv_async_t* h) {
+        reinterpret_cast<NodeMap *>(h->data)->renderFinished();
+    });
+
+    frontend = std::make_unique<mbgl::HeadlessFrontend>(mbgl::Size{ 256, 256 }, pixelRatio);
+    map = std::make_unique<mbgl::Map>(*frontend, mapObserver,
+                                      mbgl::MapOptions().withSize(frontend->getSize())
+                                      .withPixelRatio(pixelRatio)
+                                      .withMapMode(mode)
+                                      .withCrossSourceCollisions(crossSourceCollisions),
+                                      mbgl::ResourceOptions().withPlatformContext(reinterpret_cast<void*>(this)));
 
     // FIXME: Reload the style after recreating the map. We need to find
     // a better way of canceling an ongoing rendering on the core level
@@ -689,6 +783,11 @@ void NodeMap::AddImage(const Nan::FunctionCallbackInfo<v8::Value>& info) {
         return Nan::ThrowTypeError("Max height and width is 1024");
     }
 
+    bool sdf = false;
+    if (Nan::Get(optionObject, Nan::New("sdf").ToLocalChecked()).ToLocalChecked()->IsBoolean()) {
+        sdf = Nan::Get(optionObject, Nan::New("sdf").ToLocalChecked()).ToLocalChecked()->BooleanValue();
+    }
+
     float pixelRatio = Nan::Get(optionObject, Nan::New("pixelRatio").ToLocalChecked()).ToLocalChecked()->NumberValue();
     auto imageBuffer = Nan::To<v8::Object>(info[1]).ToLocalChecked()->ToObject();
     
@@ -704,7 +803,7 @@ void NodeMap::AddImage(const Nan::FunctionCallbackInfo<v8::Value>& info) {
     
     mbgl::UnassociatedImage cImage({ imageWidth, imageHeight}, std::move(data));
     mbgl::PremultipliedImage cPremultipliedImage = mbgl::util::premultiply(std::move(cImage));
-    nodeMap->map->getStyle().addImage(std::make_unique<mbgl::style::Image>(*Nan::Utf8String(info[0]), std::move(cPremultipliedImage), pixelRatio));
+    nodeMap->map->getStyle().addImage(std::make_unique<mbgl::style::Image>(*Nan::Utf8String(info[0]), std::move(cPremultipliedImage), pixelRatio, sdf));
 }
 
 void NodeMap::RemoveImage(const Nan::FunctionCallbackInfo<v8::Value>& info) {
@@ -724,8 +823,35 @@ void NodeMap::RemoveImage(const Nan::FunctionCallbackInfo<v8::Value>& info) {
 
     nodeMap->map->getStyle().removeImage(*Nan::Utf8String(info[0]));
 }
+    
+void NodeMap::SetLayerZoomRange(const Nan::FunctionCallbackInfo<v8::Value>& info) {
+    using namespace mbgl::style;
 
-void NodeMap::SetLayoutProperty(const Nan::FunctionCallbackInfo<v8::Value>& info) {
+    auto nodeMap = Nan::ObjectWrap::Unwrap<NodeMap>(info.Holder());
+    if (!nodeMap->map) return Nan::ThrowError(releasedMessage());
+    
+    if (info.Length() != 3) {
+        return Nan::ThrowTypeError("Three arguments required");
+    }
+    
+    if (!info[0]->IsString()) {
+        return Nan::ThrowTypeError("First argument must be a string");
+    }
+    
+    if (!info[1]->IsNumber() || !info[2]->IsNumber()) {
+        return Nan::ThrowTypeError("Second and third arguments must be numbers");
+    }
+    
+    mbgl::style::Layer* layer = nodeMap->map->getStyle().getLayer(*Nan::Utf8String(info[0]));
+    if (!layer) {
+        return Nan::ThrowTypeError("layer not found");
+    }
+
+    layer->setMinZoom(info[1]->NumberValue());
+    layer->setMaxZoom(info[2]->NumberValue());
+}
+
+void NodeMap::SetLayerProperty(const Nan::FunctionCallbackInfo<v8::Value>& info) {
     using namespace mbgl::style;
     using namespace mbgl::style::conversion;
 
@@ -749,66 +875,13 @@ void NodeMap::SetLayoutProperty(const Nan::FunctionCallbackInfo<v8::Value>& info
         return Nan::ThrowTypeError("Second argument must be a string");
     }
 
-    mbgl::optional<Error> error = setLayoutProperty(*layer, *Nan::Utf8String(info[1]), Convertible(info[2]));
+    mbgl::optional<Error> error = layer->setProperty(*Nan::Utf8String(info[1]), Convertible(info[2]));
     if (error) {
         return Nan::ThrowTypeError(error->message.c_str());
     }
 
     info.GetReturnValue().SetUndefined();
 }
-
-void NodeMap::SetPaintProperty(const Nan::FunctionCallbackInfo<v8::Value>& info) {
-    using namespace mbgl::style;
-    using namespace mbgl::style::conversion;
-
-    auto nodeMap = Nan::ObjectWrap::Unwrap<NodeMap>(info.Holder());
-    if (!nodeMap->map) return Nan::ThrowError(releasedMessage());
-
-    if (info.Length() < 3) {
-        return Nan::ThrowTypeError("Three arguments required");
-    }
-
-    if (!info[0]->IsString()) {
-        return Nan::ThrowTypeError("First argument must be a string");
-    }
-
-    mbgl::style::Layer* layer = nodeMap->map->getStyle().getLayer(*Nan::Utf8String(info[0]));
-    if (!layer) {
-        return Nan::ThrowTypeError("layer not found");
-    }
-
-    if (!info[1]->IsString()) {
-        return Nan::ThrowTypeError("Second argument must be a string");
-    }
-
-    mbgl::optional<Error> error = setPaintProperty(*layer, *Nan::Utf8String(info[1]), Convertible(info[2]));
-    if (error) {
-        return Nan::ThrowTypeError(error->message.c_str());
-    }
-
-    info.GetReturnValue().SetUndefined();
-}
-
-struct SetFilterVisitor {
-    mbgl::style::Filter& filter;
-
-    void operator()(mbgl::style::CustomLayer&) {
-        Nan::ThrowTypeError("layer doesn't support filters");
-    }
-
-    void operator()(mbgl::style::RasterLayer&) {
-        Nan::ThrowTypeError("layer doesn't support filters");
-    }
-
-    void operator()(mbgl::style::BackgroundLayer&) {
-        Nan::ThrowTypeError("layer doesn't support filters");
-    }
-
-    template <class VectorLayer>
-    void operator()(VectorLayer& layer) {
-        layer.setFilter(filter);
-    }
-};
 
 void NodeMap::SetFilter(const Nan::FunctionCallbackInfo<v8::Value>& info) {
     using namespace mbgl::style;
@@ -842,7 +915,7 @@ void NodeMap::SetFilter(const Nan::FunctionCallbackInfo<v8::Value>& info) {
         filter = std::move(*converted);
     }
 
-    layer->accept(SetFilterVisitor { filter });
+    layer->setFilter(filter);
 }
 
 void NodeMap::SetCenter(const Nan::FunctionCallbackInfo<v8::Value>& info) {
@@ -860,7 +933,7 @@ void NodeMap::SetCenter(const Nan::FunctionCallbackInfo<v8::Value>& info) {
     if (center->Length() > 1) { latitude = Nan::Get(center, 1).ToLocalChecked()->NumberValue(); }
 
     try {
-        nodeMap->map->setLatLng(mbgl::LatLng { latitude, longitude });
+        nodeMap->map->jumpTo(mbgl::CameraOptions().withCenter(mbgl::LatLng { latitude, longitude }));
     } catch (const std::exception &ex) {
         return Nan::ThrowError(ex.what());
     }
@@ -877,7 +950,7 @@ void NodeMap::SetZoom(const Nan::FunctionCallbackInfo<v8::Value>& info) {
     }
 
     try {
-        nodeMap->map->setZoom(info[0]->NumberValue());
+        nodeMap->map->jumpTo(mbgl::CameraOptions().withZoom(info[0]->NumberValue()));
     } catch (const std::exception &ex) {
         return Nan::ThrowError(ex.what());
     }
@@ -894,7 +967,7 @@ void NodeMap::SetBearing(const Nan::FunctionCallbackInfo<v8::Value>& info) {
     }
 
     try {
-        nodeMap->map->setBearing(info[0]->NumberValue());
+        nodeMap->map->jumpTo(mbgl::CameraOptions().withBearing(info[0]->NumberValue()));
     } catch (const std::exception &ex) {
         return Nan::ThrowError(ex.what());
     }
@@ -911,7 +984,32 @@ void NodeMap::SetPitch(const Nan::FunctionCallbackInfo<v8::Value>& info) {
     }
 
     try {
-        nodeMap->map->setPitch(info[0]->NumberValue());
+        nodeMap->map->jumpTo(mbgl::CameraOptions().withPitch(info[0]->NumberValue()));
+    } catch (const std::exception &ex) {
+        return Nan::ThrowError(ex.what());
+    }
+
+    info.GetReturnValue().SetUndefined();
+}
+
+void NodeMap::SetLight(const Nan::FunctionCallbackInfo<v8::Value>& info) {
+    using namespace mbgl::style;
+    using namespace mbgl::style::conversion;
+
+    auto nodeMap = Nan::ObjectWrap::Unwrap<NodeMap>(info.Holder());
+    if (!nodeMap->map) return Nan::ThrowError(releasedMessage());
+
+    if (info.Length() <= 0 || !info[0]->IsObject()) {
+        return Nan::ThrowTypeError("First argument must be an object");
+    }
+
+    try {
+        Error conversionError;
+        if (auto light = convert<mbgl::style::Light>(info[0], conversionError)) {
+            nodeMap->map->getStyle().setLight(std::make_unique<Light>(*light));
+        } else {
+            return Nan::ThrowTypeError(conversionError.message.c_str());
+        }
     } catch (const std::exception &ex) {
         return Nan::ThrowError(ex.what());
     }
@@ -928,7 +1026,8 @@ void NodeMap::SetAxonometric(const Nan::FunctionCallbackInfo<v8::Value>& info) {
     }
 
     try {
-        nodeMap->map->setAxonometric(info[0]->BooleanValue());
+        nodeMap->map->setProjectionMode(mbgl::ProjectionMode()
+                                        .withAxonometric(info[0]->BooleanValue()));
     } catch (const std::exception &ex) {
         return Nan::ThrowError(ex.what());
     }
@@ -945,7 +1044,8 @@ void NodeMap::SetXSkew(const Nan::FunctionCallbackInfo<v8::Value>& info) {
     }
 
     try {
-        nodeMap->map->setXSkew(info[0]->NumberValue());
+        nodeMap->map->setProjectionMode(mbgl::ProjectionMode()
+                                        .withXSkew(info[0]->NumberValue()));
     } catch (const std::exception &ex) {
         return Nan::ThrowError(ex.what());
     }
@@ -962,8 +1062,231 @@ void NodeMap::SetYSkew(const Nan::FunctionCallbackInfo<v8::Value>& info) {
     }
 
     try {
-        nodeMap->map->setYSkew(info[0]->NumberValue());
+        nodeMap->map->setProjectionMode(mbgl::ProjectionMode()
+                                        .withYSkew(info[0]->NumberValue()));
     } catch (const std::exception &ex) {
+        return Nan::ThrowError(ex.what());
+    }
+
+    info.GetReturnValue().SetUndefined();
+}
+
+void NodeMap::SetFeatureState(const Nan::FunctionCallbackInfo<v8::Value>& info) {
+    using namespace mbgl;
+    using namespace mbgl::style::conversion;
+
+    auto nodeMap = Nan::ObjectWrap::Unwrap<NodeMap>(info.Holder());
+    if (!nodeMap->map) return Nan::ThrowError(releasedMessage());
+
+    if (info.Length() < 2) {
+        return Nan::ThrowTypeError("Two arguments required");
+    }
+
+    if (!info[0]->IsObject() || !info[1]->IsObject()) {
+        return Nan::ThrowTypeError("Both arguments must be objects");
+    }
+
+    std::string sourceID;
+    std::string featureID;
+    mbgl::optional<std::string> sourceLayerID;
+    auto feature = Nan::To<v8::Object>(info[0]).ToLocalChecked();
+    if (Nan::Has(feature, Nan::New("source").ToLocalChecked()).FromJust()) {
+        auto sourceOption = Nan::Get(feature, Nan::New("source").ToLocalChecked()).ToLocalChecked();
+        if (!sourceOption->IsString()) {
+            return Nan::ThrowTypeError("Requires feature.source property to be a string");
+        }
+        sourceID = *Nan::Utf8String(sourceOption);
+    } else {
+        return Nan::ThrowTypeError("SetFeatureState: Requires feature.source property");
+    }
+
+    if (Nan::Has(feature, Nan::New("sourceLayer").ToLocalChecked()).FromJust()) {
+        auto sourceLayerOption = Nan::Get(feature, Nan::New("sourceLayer").ToLocalChecked()).ToLocalChecked();
+        if (!sourceLayerOption->IsString()) {
+            return Nan::ThrowTypeError("SetFeatureState: Requires feature.sourceLayer property to be a string");
+        }
+        sourceLayerID = {*Nan::Utf8String(sourceLayerOption)};
+    }
+
+    if (Nan::Has(feature, Nan::New("id").ToLocalChecked()).FromJust()) {
+        auto idOption = Nan::Get(feature, Nan::New("id").ToLocalChecked()).ToLocalChecked();
+        if (!idOption->IsString() && !(idOption->IsNumber() || idOption->IsString())) {
+            return Nan::ThrowTypeError("Requires feature.id property to be a string or a number");
+        }
+        featureID = *Nan::Utf8String(idOption);
+    } else {
+        return Nan::ThrowTypeError("SetFeatureState: Requires feature.id property");
+    }
+
+    Convertible state(info[1]);
+
+    if (!isObject(state)) {
+        return Nan::ThrowTypeError("Feature state must be an object");
+    }
+
+    std::string sourceLayer = sourceLayerID.value_or(std::string());
+    std::string stateKey;
+    Value stateValue;
+    bool valueParsed = false;
+    FeatureState newState;
+
+    const std::function<optional<Error>(const std::string&, const Convertible&)> convertFn =
+        [&](const std::string& k, const Convertible& v) -> optional<Error> {
+        optional<Value> value = toValue(v);
+        if (value) {
+            stateValue = std::move(*value);
+            valueParsed = true;
+        } else if (isArray(v)) {
+            std::vector<Value> array;
+            std::size_t length = arrayLength(v);
+            array.reserve(length);
+            for (size_t i = 0; i < length; ++i) {
+                optional<Value> arrayVal = toValue(arrayMember(v, i));
+                if (arrayVal) {
+                    array.emplace_back(*arrayVal);
+                }
+            }
+            std::unordered_map<std::string, Value> result;
+            result[k] = std::move(array);
+            stateValue = std::move(result);
+            valueParsed = true;
+            return {};
+
+        } else if (isObject(v)) {
+            eachMember(v, convertFn);
+        }
+        if (!valueParsed) {
+            Nan::ThrowTypeError("Could not get feature state value");
+            return nullopt;
+        }
+        stateKey = k;
+        newState[stateKey] = stateValue;
+        return nullopt;
+    };
+
+    eachMember(state, convertFn);
+
+    try {
+        nodeMap->frontend->getRenderer()->setFeatureState(sourceID, sourceLayerID, featureID, newState);
+    } catch (const std::exception& ex) {
+        return Nan::ThrowError(ex.what());
+    }
+
+    info.GetReturnValue().SetUndefined();
+}
+
+void NodeMap::GetFeatureState(const Nan::FunctionCallbackInfo<v8::Value>& info) {
+    auto nodeMap = Nan::ObjectWrap::Unwrap<NodeMap>(info.Holder());
+    if (!nodeMap->map) return Nan::ThrowError(releasedMessage());
+
+    if (info.Length() < 1) {
+        return Nan::ThrowTypeError("One argument required");
+    }
+
+    if (!info[0]->IsObject() || !info[1]->IsObject()) {
+        return Nan::ThrowTypeError("Argument must be object");
+    }
+
+    std::string sourceID;
+    std::string featureID;
+    mbgl::optional<std::string> sourceLayerID;
+    auto feature = Nan::To<v8::Object>(info[0]).ToLocalChecked();
+    if (Nan::Has(feature, Nan::New("source").ToLocalChecked()).FromJust()) {
+        auto sourceOption = Nan::Get(feature, Nan::New("source").ToLocalChecked()).ToLocalChecked();
+        if (!sourceOption->IsString()) {
+            return Nan::ThrowTypeError("Requires feature.source property to be a string");
+        }
+        sourceID = *Nan::Utf8String(sourceOption);
+    } else {
+        return Nan::ThrowTypeError("GetFeatureState: Requires feature.source property");
+    }
+
+    if (Nan::Has(feature, Nan::New("sourceLayer").ToLocalChecked()).FromJust()) {
+        auto sourceLayerOption = Nan::Get(feature, Nan::New("sourceLayer").ToLocalChecked()).ToLocalChecked();
+        if (!sourceLayerOption->IsString()) {
+            return Nan::ThrowTypeError("GetFeatureState: Requires feature.sourceLayer property to be a string");
+        }
+        sourceLayerID = {*Nan::Utf8String(sourceLayerOption)};
+    }
+
+    if (Nan::Has(feature, Nan::New("id").ToLocalChecked()).FromJust()) {
+        auto idOption = Nan::Get(feature, Nan::New("id").ToLocalChecked()).ToLocalChecked();
+        if (!idOption->IsString() && !(idOption->IsNumber() || idOption->IsString())) {
+            return Nan::ThrowTypeError("Requires feature.id property to be a string or a number");
+        }
+        featureID = *Nan::Utf8String(idOption);
+    } else {
+        return Nan::ThrowTypeError("GetFeatureState: Requires feature.id property");
+    }
+
+    mbgl::FeatureState state;
+    try {
+        nodeMap->frontend->getRenderer()->getFeatureState(state, sourceID, sourceLayerID, featureID);
+    } catch (const std::exception& ex) {
+        return Nan::ThrowError(ex.what());
+    }
+
+    info.GetReturnValue().SetUndefined();
+}
+
+void NodeMap::RemoveFeatureState(const Nan::FunctionCallbackInfo<v8::Value>& info) {
+    auto nodeMap = Nan::ObjectWrap::Unwrap<NodeMap>(info.Holder());
+    if (!nodeMap->map) return Nan::ThrowError(releasedMessage());
+
+    if (info.Length() < 1) {
+        return Nan::ThrowTypeError("At least one argument required");
+    }
+
+    if (!info[0]->IsObject()) {
+        return Nan::ThrowTypeError("Argument 1 must be object");
+    }
+
+    if (info.Length() == 2 && !info[1]->IsString()) {
+        return Nan::ThrowTypeError("argument 2 must be string");
+    }
+
+    std::string sourceID;
+    mbgl::optional<std::string> sourceLayerID;
+    mbgl::optional<std::string> featureID;
+    mbgl::optional<std::string> stateKey;
+    auto feature = Nan::To<v8::Object>(info[0]).ToLocalChecked();
+    if (Nan::Has(feature, Nan::New("source").ToLocalChecked()).FromJust()) {
+        auto sourceOption = Nan::Get(feature, Nan::New("source").ToLocalChecked()).ToLocalChecked();
+        if (!sourceOption->IsString()) {
+            return Nan::ThrowTypeError("Requires feature.source property to be a string");
+        }
+        sourceID = *Nan::Utf8String(sourceOption);
+    } else {
+        return Nan::ThrowTypeError("RemoveFeatureState: Requires feature.source property");
+    }
+
+    if (Nan::Has(feature, Nan::New("sourceLayer").ToLocalChecked()).FromJust()) {
+        auto sourceLayerOption = Nan::Get(feature, Nan::New("sourceLayer").ToLocalChecked()).ToLocalChecked();
+        if (!sourceLayerOption->IsString()) {
+            return Nan::ThrowTypeError("RemoveFeatureState: Requires feature.sourceLayer property to be a string");
+        }
+        sourceLayerID = {*Nan::Utf8String(sourceLayerOption)};
+    }
+
+    if (Nan::Has(feature, Nan::New("id").ToLocalChecked()).FromJust()) {
+        auto idOption = Nan::Get(feature, Nan::New("id").ToLocalChecked()).ToLocalChecked();
+        if (!idOption->IsString() && !(idOption->IsNumber() || idOption->IsString())) {
+            return Nan::ThrowTypeError("Requires feature.id property to be a string or a number");
+        }
+        featureID = {*Nan::Utf8String(idOption)};
+    }
+
+    if (info.Length() == 2) {
+        auto keyParam = Nan::To<v8::String>(info[1]).ToLocalChecked();
+        if (!keyParam->IsString()) {
+            return Nan::ThrowTypeError("RemoveFeatureState: Requires feature key property to be a string");
+        }
+        stateKey = {*Nan::Utf8String(keyParam)};
+    }
+
+    try {
+        nodeMap->frontend->getRenderer()->removeFeatureState(sourceID, sourceLayerID, featureID, stateKey);
+    } catch (const std::exception& ex) {
         return Nan::ThrowError(ex.what());
     }
 
@@ -1056,7 +1379,7 @@ void NodeMap::QueryRenderedFeatures(const Nan::FunctionCallbackInfo<v8::Value>& 
         }
 
         auto array = Nan::New<v8::Array>();
-        for (unsigned int i = 0; i < optional.size(); i++) {
+        for (std::size_t i = 0; i < optional.size(); i++) {
             array->Set(i, toJS(optional[i]));
         }
         info.GetReturnValue().Set(array);
@@ -1083,17 +1406,23 @@ NodeMap::NodeMap(v8::Local<v8::Object> options)
                 return mbgl::MapMode::Static;
             }
       }())
+    , crossSourceCollisions([&] {
+        Nan::HandleScope scope;
+        return Nan::Has(options, Nan::New("crossSourceCollisions").ToLocalChecked()).FromJust()
+            ? Nan::Get(options, Nan::New("crossSourceCollisions").ToLocalChecked())
+                .ToLocalChecked()
+                ->BooleanValue()
+            : true;
+    }())
     , mapObserver(NodeMapObserver())
-    , frontend(std::make_unique<mbgl::HeadlessFrontend>(mbgl::Size { 256, 256 }, pixelRatio, *this, threadpool))
-    , map(std::make_unique<mbgl::Map>(*frontend,
-                                      mapObserver,
-                                      frontend->getSize(),
-                                      pixelRatio,
-                                      *this,
-                                      threadpool,
-                                      mode)),
-      async(new uv_async_t) {
-
+    , frontend(std::make_unique<mbgl::HeadlessFrontend>(mbgl::Size { 256, 256 }, pixelRatio))
+    , map(std::make_unique<mbgl::Map>(*frontend, mapObserver,
+                                      mbgl::MapOptions().withSize(frontend->getSize())
+                                      .withPixelRatio(pixelRatio)
+                                      .withMapMode(mode)
+                                      .withCrossSourceCollisions(crossSourceCollisions),
+                                      mbgl::ResourceOptions().withPlatformContext(reinterpret_cast<void*>(this))))
+    , async(new uv_async_t) {
     async->data = this;
     uv_async_init(uv_default_loop(), async, [](uv_async_t* h) {
         reinterpret_cast<NodeMap *>(h->data)->renderFinished();
@@ -1104,26 +1433,39 @@ NodeMap::NodeMap(v8::Local<v8::Object> options)
 }
 
 NodeMap::~NodeMap() {
-    if (map) release();
+    try {
+        if (map) release();
+    } catch (...) {
+        mbgl::Log::Error(mbgl::Event::General, "Error release the map object when destroying NodeMap");
+    }
 }
 
-std::unique_ptr<mbgl::AsyncRequest> NodeMap::request(const mbgl::Resource& resource, mbgl::FileSource::Callback callback_) {
+std::unique_ptr<mbgl::AsyncRequest> NodeFileSource::request(const mbgl::Resource& resource, mbgl::FileSource::Callback callback_) {
+    assert(nodeMap);
+
     Nan::HandleScope scope;
+    // Because this method may be called while this NodeMap is already eligible for garbage collection,
+    // we need to explicitly hold onto our own handle here so that GC during a v8 call doesn't destroy
+    // *this while we're still executing code.
+    nodeMap->handle();
+
+    auto asyncRequest = std::make_unique<node_mbgl::NodeAsyncRequest>();
 
     v8::Local<v8::Value> argv[] = {
-        Nan::New<v8::External>(this),
-        Nan::New<v8::External>(&callback_)
+        Nan::New<v8::External>(nodeMap),
+        Nan::New<v8::External>(&callback_),
+        Nan::New<v8::External>(asyncRequest.get()),
+        Nan::New(resource.url).ToLocalChecked(),
+        Nan::New<v8::Integer>(resource.kind)
     };
 
-    auto instance = Nan::New(NodeRequest::constructor)->NewInstance(2, argv);
+    Nan::NewInstance(Nan::New(node_mbgl::NodeRequest::constructor), 5, argv).ToLocalChecked();
 
-    Nan::Set(instance, Nan::New("url").ToLocalChecked(), Nan::New(resource.url).ToLocalChecked());
-    Nan::Set(instance, Nan::New("kind").ToLocalChecked(), Nan::New<v8::Integer>(resource.kind));
+    return asyncRequest;
+}
 
-    auto request = Nan::ObjectWrap::Unwrap<NodeRequest>(instance);
-    request->Execute();
-
-    return std::make_unique<NodeRequest::NodeAsyncRequest>(request);
+bool NodeFileSource::canRequest(const mbgl::Resource&) const {
+    return true;
 }
 
 } // namespace node_mbgl

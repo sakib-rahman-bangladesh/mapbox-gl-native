@@ -1,6 +1,6 @@
 #include <mbgl/test/util.hpp>
 #include <mbgl/util/io.hpp>
-#include <mbgl/style/conversion.hpp>
+#include <mbgl/style/conversion_impl.hpp>
 #include <mbgl/util/rapidjson.hpp>
 #include <mbgl/style/rapidjson_conversion.hpp>
 #include <mbgl/style/expression/is_expression.hpp>
@@ -24,15 +24,24 @@ TEST(Expression, IsExpression) {
                 spec["expression_name"].IsObject() &&
                 spec["expression_name"].HasMember("values") &&
                 spec["expression_name"]["values"].IsObject());
-    
+
     const auto& allExpressions = spec["expression_name"]["values"];
-    
+
     for(auto& entry : allExpressions.GetObject()) {
         const std::string name { entry.name.GetString(), entry.name.GetStringLength() };
         JSDocument document;
         document.Parse<0>(R"([")" + name + R"("])");
-
         const JSValue* expression = &document;
+
+        // TODO: "interpolate-hcl": https://github.com/mapbox/mapbox-gl-native/issues/8720
+        // TODO: "interpolate-lab": https://github.com/mapbox/mapbox-gl-native/issues/8720
+        if (name == "interpolate-hcl" || name == "interpolate-lab") {
+            if (expression::isExpression(conversion::Convertible(expression))) {
+                ASSERT_TRUE(false) << "Expression name" << name << "is implemented - please update Expression.IsExpression test.";
+            }
+            continue;
+        }
+
         EXPECT_TRUE(expression::isExpression(conversion::Convertible(expression))) << name;
     }
 }
@@ -49,7 +58,7 @@ TEST_P(ExpressionEqualityTest, ExpressionEquality) {
         assert(!document.HasParseError());
         const JSValue* expression = &document;
         expression::ParsingContext ctx;
-        expression::ParseResult parsed = ctx.parse(conversion::Convertible(expression));
+        expression::ParseResult parsed = ctx.parseExpression(conversion::Convertible(expression));
         if (!parsed) {
             error_ = ctx.getErrors().size() > 0 ? ctx.getErrors()[0].message : "failed to parse";
         };
@@ -70,22 +79,29 @@ TEST_P(ExpressionEqualityTest, ExpressionEquality) {
     EXPECT_TRUE(*expression_a1 != *expression_b);
 }
 
-INSTANTIATE_TEST_CASE_P(Expression, ExpressionEqualityTest, ::testing::ValuesIn([] {
-    std::vector<std::string> names;
-    const std::string ending = ".a.json";
+INSTANTIATE_TEST_SUITE_P(Expression, ExpressionEqualityTest, ::testing::ValuesIn([] {
+                             std::vector<std::string> names;
+                             const std::string ending = ".a.json";
 
-    const std::string style_directory = "test/fixtures/expression_equality";
-    DIR *dir = opendir(style_directory.c_str());
-    if (dir != nullptr) {
-        for (dirent *dp = nullptr; (dp = readdir(dir)) != nullptr;) {
-            const std::string name = dp->d_name;
-            if (name.length() >= ending.length() && name.compare(name.length() - ending.length(), ending.length(), ending) == 0) {
-                names.push_back(name.substr(0, name.length() - ending.length()));
-            }
-        }
-        closedir(dir);
-    }
+                             const std::string style_directory = "test/fixtures/expression_equality";
+                             DIR* dir = opendir(style_directory.c_str());
+                             if (dir != nullptr) {
+                                 for (dirent* dp = nullptr; (dp = readdir(dir)) != nullptr;) {
+                                     const std::string name = dp->d_name;
+#if ANDROID
+                                     // Android unit test uses number-format stub implementation so skip the tests
+                                     if (name.find("number-format") != std::string::npos) {
+                                         continue;
+                                     }
+#endif
+                                     if (name.length() >= ending.length() &&
+                                         name.compare(name.length() - ending.length(), ending.length(), ending) == 0) {
+                                         names.push_back(name.substr(0, name.length() - ending.length()));
+                                     }
+                                 }
+                                 closedir(dir);
+                             }
 
-    EXPECT_GT(names.size(), 0u);
-    return names;
-}()));
+                             EXPECT_GT(names.size(), 0u);
+                             return names;
+                         }()));

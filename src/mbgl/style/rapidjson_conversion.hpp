@@ -1,7 +1,7 @@
 #pragma once
 
 #include <mbgl/util/rapidjson.hpp>
-#include <mbgl/style/conversion.hpp>
+#include <mbgl/style/conversion_impl.hpp>
 
 #include <mapbox/geojson.hpp>
 #include <mapbox/geojson/rapidjson.hpp>
@@ -35,7 +35,7 @@ public:
 
     static optional<const JSValue*> objectMember(const JSValue* value, const char * name) {
         if (!value->HasMember(name)) {
-            return optional<const JSValue*>();
+            return {};
         }
         const JSValue* const& member = &(*value)[name];
         return {member};

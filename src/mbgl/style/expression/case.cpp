@@ -1,4 +1,5 @@
 #include <mbgl/style/expression/case.hpp>
+#include <mbgl/style/conversion_impl.hpp>
 #include <mbgl/util/string.hpp>
 
 namespace mbgl {
@@ -28,10 +29,24 @@ void Case::eachChild(const std::function<void(const Expression&)>& visit) const 
 }
 
 bool Case::operator==(const Expression& e) const {
-    if (auto rhs = dynamic_cast<const Case*>(&e)) {
+    if (e.getKind() == Kind::Case) {
+        auto rhs = static_cast<const Case*>(&e);
         return *otherwise == *(rhs->otherwise) && Expression::childrenEqual(branches, rhs->branches);
     }
     return false;
+}
+
+std::vector<optional<Value>> Case::possibleOutputs() const {
+    std::vector<optional<Value>> result;
+    for (const auto& branch : branches) {
+        for (auto& output : branch.second->possibleOutputs()) {
+            result.push_back(std::move(output));
+        }
+    }
+    for (auto& output : otherwise->possibleOutputs()) {
+        result.push_back(std::move(output));
+    }
+    return result;
 }
 
 using namespace mbgl::style::conversion;
@@ -71,7 +86,7 @@ ParseResult Case::parse(const Convertible& value, ParsingContext& ctx) {
             outputType = (*output)->getType();
         }
 
-        branches.push_back(std::make_pair(std::move(*test), std::move(*output)));
+        branches.emplace_back(std::move(*test), std::move(*output));
     }
 
     assert(outputType);

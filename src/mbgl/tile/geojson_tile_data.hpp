@@ -7,9 +7,9 @@ namespace mbgl {
 
 class GeoJSONTileFeature : public GeometryTileFeature {
 public:
-    const mapbox::geometry::feature<int16_t>& feature;
+    const mapbox::feature::feature<int16_t>& feature;
 
-    GeoJSONTileFeature(const mapbox::geometry::feature<int16_t>& feature_)
+    GeoJSONTileFeature(const mapbox::feature::feature<int16_t>& feature_)
         : feature(feature_) {
     }
 
@@ -17,23 +17,25 @@ public:
         return apply_visitor(ToFeatureType(), feature.geometry);
     }
 
-    PropertyMap getProperties() const override {
+    const PropertyMap& getProperties() const override {
         return feature.properties;
     }
 
-    optional<FeatureIdentifier> getID() const override {
+    FeatureIdentifier getID() const override {
         return feature.id;
     }
 
-    GeometryCollection getGeometries() const override {
-        GeometryCollection geometry = apply_visitor(ToGeometryCollection(), feature.geometry);
+    const GeometryCollection& getGeometries() const override {
+        if (!geometry) {
+            geometry = apply_visitor(ToGeometryCollection(), feature.geometry);
 
-        // https://github.com/mapbox/geojson-vt-cpp/issues/44
-        if (getType() == FeatureType::Polygon) {
-            geometry = fixupPolygons(geometry);
+            // https://github.com/mapbox/geojson-vt-cpp/issues/44
+            if (getType() == FeatureType::Polygon) {
+                geometry = fixupPolygons(*geometry);
+            }
         }
 
-        return geometry;
+        return *geometry;
     }
 
     optional<Value> getValue(const std::string& key) const override {
@@ -43,11 +45,13 @@ public:
         }
         return optional<Value>();
     }
+
+    mutable optional<GeometryCollection> geometry;
 };
 
 class GeoJSONTileLayer : public GeometryTileLayer {
 public:
-    GeoJSONTileLayer(std::shared_ptr<const mapbox::geometry::feature_collection<int16_t>> features_)
+    GeoJSONTileLayer(std::shared_ptr<const mapbox::feature::feature_collection<int16_t>> features_)
         : features(std::move(features_)) {
     }
 
@@ -64,17 +68,17 @@ public:
     }
 
 private:
-    std::shared_ptr<const mapbox::geometry::feature_collection<int16_t>> features;
+    std::shared_ptr<const mapbox::feature::feature_collection<int16_t>> features;
 };
 
 class GeoJSONTileData : public GeometryTileData {
 public:
-    GeoJSONTileData(mapbox::geometry::feature_collection<int16_t> features_)
-        : features(std::make_shared<mapbox::geometry::feature_collection<int16_t>>(
+    GeoJSONTileData(mapbox::feature::feature_collection<int16_t> features_)
+        : features(std::make_shared<mapbox::feature::feature_collection<int16_t>>(
               std::move(features_))) {
     }
 
-    GeoJSONTileData(std::shared_ptr<const mapbox::geometry::feature_collection<int16_t>> features_)
+    GeoJSONTileData(std::shared_ptr<const mapbox::feature::feature_collection<int16_t>> features_)
         : features(std::move(features_)) {
     }
 
@@ -88,7 +92,7 @@ public:
 
 
 private:
-    std::shared_ptr<const mapbox::geometry::feature_collection<int16_t>> features;
+    std::shared_ptr<const mapbox::feature::feature_collection<int16_t>> features;
 };
 
 } // namespace mbgl

@@ -25,6 +25,16 @@ MBGL_DEFINE_ENUM(TranslateAnchorType, {
     { TranslateAnchorType::Viewport, "viewport" },
 });
 
+MBGL_DEFINE_ENUM(RasterResamplingType, {
+    { RasterResamplingType::Linear, "linear" },
+    { RasterResamplingType::Nearest, "nearest" },
+});
+
+MBGL_DEFINE_ENUM(HillshadeIlluminationAnchorType, {
+    { HillshadeIlluminationAnchorType::Map, "map" },
+    { HillshadeIlluminationAnchorType::Viewport, "viewport" },
+});
+
 MBGL_DEFINE_ENUM(RotateAnchorType, {
     { RotateAnchorType::Map, "map" },
     { RotateAnchorType::Viewport, "viewport" },
@@ -52,6 +62,7 @@ MBGL_DEFINE_ENUM(LineJoinType, {
 MBGL_DEFINE_ENUM(SymbolPlacementType, {
     { SymbolPlacementType::Point, "point" },
     { SymbolPlacementType::Line, "line" },
+    { SymbolPlacementType::LineCenter, "line-center" },
 });
 
 MBGL_DEFINE_ENUM(SymbolAnchorType, {
@@ -66,7 +77,14 @@ MBGL_DEFINE_ENUM(SymbolAnchorType, {
     { SymbolAnchorType::BottomRight, "bottom-right" }
 });
 
+MBGL_DEFINE_ENUM(SymbolZOrderType, {
+    { SymbolZOrderType::Auto, "auto" },
+    { SymbolZOrderType::ViewportY, "viewport-y" },
+    { SymbolZOrderType::Source, "source" }
+});
+
 MBGL_DEFINE_ENUM(TextJustifyType, {
+    { TextJustifyType::Auto, "auto" },
     { TextJustifyType::Center, "center" },
     { TextJustifyType::Left, "left" },
     { TextJustifyType::Right, "right" },
@@ -76,6 +94,11 @@ MBGL_DEFINE_ENUM(TextTransformType, {
     { TextTransformType::None, "none" },
     { TextTransformType::Uppercase, "uppercase" },
     { TextTransformType::Lowercase, "lowercase" },
+});
+
+MBGL_DEFINE_ENUM(TextWritingModeType, {
+    { TextWritingModeType::Horizontal, "horizontal" },
+    { TextWritingModeType::Vertical, "vertical" }
 });
 
 MBGL_DEFINE_ENUM(AlignmentType, {

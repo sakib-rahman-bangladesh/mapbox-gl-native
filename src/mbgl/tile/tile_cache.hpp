@@ -1,6 +1,8 @@
 #pragma once
 
 #include <mbgl/tile/tile_id.hpp>
+#include <mbgl/tile/tile.hpp>
+
 
 #include <list>
 #include <memory>
@@ -8,16 +10,15 @@
 
 namespace mbgl {
 
-class Tile;
-
 class TileCache {
 public:
     TileCache(size_t size_ = 0) : size(size_) {}
 
     void setSize(size_t);
     size_t getSize() const { return size; };
-    void add(const OverscaledTileID& key, std::unique_ptr<Tile> data);
-    std::unique_ptr<Tile> get(const OverscaledTileID& key);
+    void add(const OverscaledTileID& key, std::unique_ptr<Tile> tile);
+    std::unique_ptr<Tile> pop(const OverscaledTileID& key);
+    Tile* get(const OverscaledTileID& key);
     bool has(const OverscaledTileID& key);
     void clear();
 

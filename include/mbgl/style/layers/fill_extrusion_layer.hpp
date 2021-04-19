@@ -1,3 +1,5 @@
+// clang-format off
+
 // This file is generated. Do not edit.
 
 #pragma once
@@ -5,8 +7,6 @@
 #include <mbgl/style/layer.hpp>
 #include <mbgl/style/filter.hpp>
 #include <mbgl/style/property_value.hpp>
-#include <mbgl/style/data_driven_property_value.hpp>
-
 #include <mbgl/util/color.hpp>
 
 namespace mbgl {
@@ -14,69 +14,60 @@ namespace style {
 
 class TransitionOptions;
 
-class FillExtrusionLayer : public Layer {
+class FillExtrusionLayer final : public Layer {
 public:
     FillExtrusionLayer(const std::string& layerID, const std::string& sourceID);
-    ~FillExtrusionLayer() final;
-
-    // Source
-    const std::string& getSourceID() const;
-    const std::string& getSourceLayer() const;
-    void setSourceLayer(const std::string& sourceLayer);
-
-    void setFilter(const Filter&);
-    const Filter& getFilter() const;
-
-    // Visibility
-    void setVisibility(VisibilityType) final;
-
-    // Zoom range
-    void setMinZoom(float) final;
-    void setMaxZoom(float) final;
+    ~FillExtrusionLayer() override;
 
     // Paint properties
 
-    static PropertyValue<float> getDefaultFillExtrusionOpacity();
-    PropertyValue<float> getFillExtrusionOpacity() const;
-    void setFillExtrusionOpacity(PropertyValue<float>);
-    void setFillExtrusionOpacityTransition(const TransitionOptions&);
-    TransitionOptions getFillExtrusionOpacityTransition() const;
+    static PropertyValue<float> getDefaultFillExtrusionBase();
+    const PropertyValue<float>& getFillExtrusionBase() const;
+    void setFillExtrusionBase(const PropertyValue<float>&);
+    void setFillExtrusionBaseTransition(const TransitionOptions&);
+    TransitionOptions getFillExtrusionBaseTransition() const;
 
-    static DataDrivenPropertyValue<Color> getDefaultFillExtrusionColor();
-    DataDrivenPropertyValue<Color> getFillExtrusionColor() const;
-    void setFillExtrusionColor(DataDrivenPropertyValue<Color>);
+    static PropertyValue<Color> getDefaultFillExtrusionColor();
+    const PropertyValue<Color>& getFillExtrusionColor() const;
+    void setFillExtrusionColor(const PropertyValue<Color>&);
     void setFillExtrusionColorTransition(const TransitionOptions&);
     TransitionOptions getFillExtrusionColorTransition() const;
 
+    static PropertyValue<float> getDefaultFillExtrusionHeight();
+    const PropertyValue<float>& getFillExtrusionHeight() const;
+    void setFillExtrusionHeight(const PropertyValue<float>&);
+    void setFillExtrusionHeightTransition(const TransitionOptions&);
+    TransitionOptions getFillExtrusionHeightTransition() const;
+
+    static PropertyValue<float> getDefaultFillExtrusionOpacity();
+    const PropertyValue<float>& getFillExtrusionOpacity() const;
+    void setFillExtrusionOpacity(const PropertyValue<float>&);
+    void setFillExtrusionOpacityTransition(const TransitionOptions&);
+    TransitionOptions getFillExtrusionOpacityTransition() const;
+
+    static PropertyValue<expression::Image> getDefaultFillExtrusionPattern();
+    const PropertyValue<expression::Image>& getFillExtrusionPattern() const;
+    void setFillExtrusionPattern(const PropertyValue<expression::Image>&);
+    void setFillExtrusionPatternTransition(const TransitionOptions&);
+    TransitionOptions getFillExtrusionPatternTransition() const;
+
     static PropertyValue<std::array<float, 2>> getDefaultFillExtrusionTranslate();
-    PropertyValue<std::array<float, 2>> getFillExtrusionTranslate() const;
-    void setFillExtrusionTranslate(PropertyValue<std::array<float, 2>>);
+    const PropertyValue<std::array<float, 2>>& getFillExtrusionTranslate() const;
+    void setFillExtrusionTranslate(const PropertyValue<std::array<float, 2>>&);
     void setFillExtrusionTranslateTransition(const TransitionOptions&);
     TransitionOptions getFillExtrusionTranslateTransition() const;
 
     static PropertyValue<TranslateAnchorType> getDefaultFillExtrusionTranslateAnchor();
-    PropertyValue<TranslateAnchorType> getFillExtrusionTranslateAnchor() const;
-    void setFillExtrusionTranslateAnchor(PropertyValue<TranslateAnchorType>);
+    const PropertyValue<TranslateAnchorType>& getFillExtrusionTranslateAnchor() const;
+    void setFillExtrusionTranslateAnchor(const PropertyValue<TranslateAnchorType>&);
     void setFillExtrusionTranslateAnchorTransition(const TransitionOptions&);
     TransitionOptions getFillExtrusionTranslateAnchorTransition() const;
 
-    static PropertyValue<std::string> getDefaultFillExtrusionPattern();
-    PropertyValue<std::string> getFillExtrusionPattern() const;
-    void setFillExtrusionPattern(PropertyValue<std::string>);
-    void setFillExtrusionPatternTransition(const TransitionOptions&);
-    TransitionOptions getFillExtrusionPatternTransition() const;
-
-    static DataDrivenPropertyValue<float> getDefaultFillExtrusionHeight();
-    DataDrivenPropertyValue<float> getFillExtrusionHeight() const;
-    void setFillExtrusionHeight(DataDrivenPropertyValue<float>);
-    void setFillExtrusionHeightTransition(const TransitionOptions&);
-    TransitionOptions getFillExtrusionHeightTransition() const;
-
-    static DataDrivenPropertyValue<float> getDefaultFillExtrusionBase();
-    DataDrivenPropertyValue<float> getFillExtrusionBase() const;
-    void setFillExtrusionBase(DataDrivenPropertyValue<float>);
-    void setFillExtrusionBaseTransition(const TransitionOptions&);
-    TransitionOptions getFillExtrusionBaseTransition() const;
+    static PropertyValue<bool> getDefaultFillExtrusionVerticalGradient();
+    const PropertyValue<bool>& getFillExtrusionVerticalGradient() const;
+    void setFillExtrusionVerticalGradient(const PropertyValue<bool>&);
+    void setFillExtrusionVerticalGradientTransition(const TransitionOptions&);
+    TransitionOptions getFillExtrusionVerticalGradientTransition() const;
 
     // Private implementation
 
@@ -86,12 +77,18 @@ public:
     Mutable<Impl> mutableImpl() const;
     FillExtrusionLayer(Immutable<Impl>);
     std::unique_ptr<Layer> cloneRef(const std::string& id) const final;
-};
 
-template <>
-inline bool Layer::is<FillExtrusionLayer>() const {
-    return getType() == LayerType::FillExtrusion;
-}
+protected:
+    // Dynamic properties
+    optional<conversion::Error> setPropertyInternal(const std::string& name, const conversion::Convertible& value) final;
+
+    StyleProperty getProperty(const std::string& name) const final;
+    Value serialize() const final;
+
+    Mutable<Layer::Impl> mutableBaseImpl() const final;
+};
 
 } // namespace style
 } // namespace mbgl
+
+// clang-format on

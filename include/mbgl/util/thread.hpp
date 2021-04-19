@@ -3,6 +3,7 @@
 #include <mbgl/actor/actor.hpp>
 #include <mbgl/actor/mailbox.hpp>
 #include <mbgl/actor/scheduler.hpp>
+#include <mbgl/platform/thread.hpp>
 #include <mbgl/util/platform.hpp>
 #include <mbgl/util/run_loop.hpp>
 #include <mbgl/util/util.hpp>
@@ -36,46 +37,65 @@ namespace util {
 // - A `RunLoop` is created for the `Object` thread.
 // - `Object` can use `Timer` and do asynchronous I/O, like wait for sockets events.
 //
-template<class Object>
-class Thread : public Scheduler {
+template <typename Object>
+class Thread {
 public:
-    template <class... Args>
-    Thread(const std::string& name, Args&&... args) {
-        std::promise<void> running;
-
-        thread = std::thread([&] {
+    template <typename TupleArgs>
+    Thread(std::function<void()> prioritySetter_, const std::string& name, TupleArgs&& args) {
+        std::promise<void> running_;
+        running = running_.get_future();
+        thread = std::thread([this,
+                              name,
+                              capturedArgs = std::forward<TupleArgs>(args),
+                              runningPromise = std::move(running_),
+                              prioritySetter = std::move(prioritySetter_)]() mutable {
             platform::setCurrentThreadName(name);
-            platform::makeThreadLowPriority();
+            if (prioritySetter) prioritySetter();
+            platform::attachThread();
 
-            util::RunLoop loop_(util::RunLoop::Type::New);
-            loop = &loop_;
+            // narrowing the scope to release the Object before we detach the thread
+            {
+                util::RunLoop loop_(util::RunLoop::Type::New);
+                loop = &loop_;
+                EstablishedActor<Object> establishedActor(loop_, object, std::move(capturedArgs));
 
-            object = std::make_unique<Actor<Object>>(*this, std::forward<Args>(args)...);
-            running.set_value();
+                runningPromise.set_value();
 
-            loop->run();
-            loop = nullptr;
+                loop->run();
+
+                (void) establishedActor;
+
+                loop = nullptr;
+            }
+
+            platform::detachThread();
         });
-
-        running.get_future().get();
     }
 
-    ~Thread() override {
+    template <typename... Args>
+    Thread(const std::string& name, Args&&... args)
+        : Thread([] { platform::makeThreadLowPriority(); }, name, std::make_tuple(std::forward<Args>(args)...)) {}
+
+    template <typename... Args>
+    Thread(const std::function<void()>& prioritySetter, const std::string& name, Args&&... args)
+        : Thread(prioritySetter, name, std::make_tuple(std::forward<Args>(args)...)) {}
+
+    ~Thread() {
         if (paused) {
             resume();
         }
 
-        std::promise<void> joinable;
+        std::promise<void> stoppable;
+        
+        running.wait();
 
-        // Kill the actor, so we don't get more
-        // messages posted on this scheduler after
-        // we delete the RunLoop.
+        // Invoke a noop task on the run loop to ensure that we're executing
+        // run() before we call stop()
         loop->invoke([&] {
-            object.reset();
-            joinable.set_value();
+            stoppable.set_value();
         });
 
-        joinable.get_future().get();
+        stoppable.get_future().get();
 
         loop->stop();
         thread.join();
@@ -85,8 +105,8 @@ public:
     // can be used to send messages to `Object`. It is safe
     // to the non-owning reference to outlive this object
     // and be used after the `Thread<>` gets destroyed.
-    ActorRef<std::decay_t<Object>> actor() const {
-        return object->self();
+    ActorRef<std::decay_t<Object>> actor() {
+        return object.self();
     }
 
     // Pauses the `Object` thread. It will prevent the object to wake
@@ -103,7 +123,9 @@ public:
 
         auto pausing = paused->get_future();
 
-        loop->invoke([this] {
+        running.wait();
+
+        loop->invoke(RunLoop::Priority::High, [this] {
             auto resuming = resumed->get_future();
             paused->set_value();
             resuming.get();
@@ -127,35 +149,22 @@ public:
 private:
     MBGL_STORE_THREAD(tid);
 
-    void schedule(std::weak_ptr<Mailbox> mailbox) override {
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            queue.push(mailbox);
-        }
+    AspiringActor<Object> object;
 
-        loop->invoke([this] { receive(); });
-    }
-
-    void receive() {
-        std::unique_lock<std::mutex> lock(mutex);
-
-        auto mailbox = queue.front();
-        queue.pop();
-        lock.unlock();
-
-        Mailbox::maybeReceive(mailbox);
-    }
-
-    std::mutex mutex;
-    std::queue<std::weak_ptr<Mailbox>> queue;
     std::thread thread;
-    std::unique_ptr<Actor<Object>> object;
 
+    std::future<void> running;
+    
     std::unique_ptr<std::promise<void>> paused;
     std::unique_ptr<std::promise<void>> resumed;
 
     util::RunLoop* loop = nullptr;
 };
+
+// Returns function, that once invoked, will set a thread priority for
+// a thread `threadType` based on a setting provided by corresponding
+// Settings' platform::EXPERIMENTAL_THREAD_PRIORITY_* value.
+std::function<void()> makeThreadPrioritySetter(std::string threadType);
 
 } // namespace util
 } // namespace mbgl

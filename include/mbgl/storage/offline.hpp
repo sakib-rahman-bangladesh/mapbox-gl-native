@@ -1,8 +1,10 @@
 #pragma once
 
 #include <mbgl/util/geo.hpp>
+#include <mbgl/util/geometry.hpp>
 #include <mbgl/util/range.hpp>
 #include <mbgl/util/optional.hpp>
+#include <mbgl/util/variant.hpp>
 #include <mbgl/style/types.hpp>
 #include <mbgl/storage/response.hpp>
 
@@ -27,25 +29,45 @@ class TileID;
  */
 class OfflineTilePyramidRegionDefinition {
 public:
-    OfflineTilePyramidRegionDefinition(std::string, LatLngBounds, double, double, float);
+    OfflineTilePyramidRegionDefinition(std::string, LatLngBounds, double, double, float, bool);
 
     /* Private */
-    std::vector<CanonicalTileID> tileCover(style::SourceType, uint16_t tileSize, const Range<uint8_t>& zoomRange) const;
-    uint64_t tileCount(style::SourceType, uint16_t tileSize, const Range<uint8_t>& zoomRange) const;
-    const std::string styleURL;
-    const LatLngBounds bounds;
-    const double minZoom;
-    const double maxZoom;
-    const float pixelRatio;
-private:
-    Range<uint8_t> coveringZoomRange(style::SourceType, uint16_t tileSize, const Range<uint8_t>& zoomRange) const;
+    std::string styleURL;
+    LatLngBounds bounds;
+    double minZoom;
+    double maxZoom;
+    float pixelRatio;
+    bool includeIdeographs;
 };
 
 /*
- * For the present, a tile pyramid is the only type of offline region. In the future,
- * other definition types will be available and this will be a variant type.
+ * An offline region defined by a style URL, geometry, zoom range, and
+ * device pixel ratio.
+ *
+ * Both minZoom and maxZoom must be ≥ 0, and maxZoom must be ≥ minZoom.
+ *
+ * maxZoom may be ∞, in which case for each tile source, the region will include
+ * tiles from minZoom up to the maximum zoom level provided by that source.
+ *
+ * pixelRatio must be ≥ 0 and should typically be 1.0 or 2.0.
  */
-using OfflineRegionDefinition = OfflineTilePyramidRegionDefinition;
+class OfflineGeometryRegionDefinition {
+public:
+    OfflineGeometryRegionDefinition(std::string styleURL, Geometry<double>, double minZoom, double maxZoom, float pixelRatio, bool includeIdeographs);
+
+    /* Private */
+    std::string styleURL;
+    Geometry<double> geometry;
+    double minZoom;
+    double maxZoom;
+    float pixelRatio;
+    bool includeIdeographs;
+};
+
+/*
+ * The offline region definition types supported
+ */
+using OfflineRegionDefinition = variant<OfflineTilePyramidRegionDefinition, OfflineGeometryRegionDefinition>;
 
 /*
  * The encoded format is private.
@@ -107,6 +129,11 @@ public:
     uint64_t completedTileCount = 0;
 
     /**
+     * The number of tiles that are known to be required for this region.
+     */
+    uint64_t requiredTileCount = 0;
+
+    /**
      * The cumulative size, in bytes, of all tiles that have been fully downloaded.
      * This is a subset of `completedResourceSize`.
      */
@@ -131,7 +158,7 @@ public:
     bool requiredResourceCountIsPrecise = false;
 
     bool complete() const {
-        return completedResourceCount == requiredResourceCount;
+        return completedResourceCount >= requiredResourceCount;
     }
 };
 
@@ -164,15 +191,14 @@ public:
      * responsibility of the SDK bindings to wrap this object in an interface that
      * re-executes the user-provided implementation on the main thread.
      */
-    virtual void responseError(Response::Error) {}
+    virtual void responseError(Response::Error) {} // NOLINT(performance-unnecessary-value-param)
 
     /*
      * Implement this method to be notified when the limit on the number of Mapbox
      * tiles stored for offline regions has been reached.
      *
      * Once the limit has been reached, the SDK will not download further offline
-     * tiles from Mapbox APIs until existing tiles have been removed. Contact your
-     * Mapbox sales representative to raise the limit.
+     * tiles from Mapbox APIs until existing tiles have been removed.
      *
      * This limit does not apply to non-Mapbox tile sources.
      *
@@ -185,14 +211,8 @@ public:
 
 class OfflineRegion {
 public:
-    // Move-only; not publicly constructible.
-    OfflineRegion(OfflineRegion&&);
-    OfflineRegion& operator=(OfflineRegion&&);
     ~OfflineRegion();
-
     OfflineRegion() = delete;
-    OfflineRegion(const OfflineRegion&) = delete;
-    OfflineRegion& operator=(const OfflineRegion&) = delete;
 
     int64_t getID() const;
     const OfflineRegionDefinition& getDefinition() const;
@@ -205,9 +225,11 @@ private:
                   OfflineRegionDefinition,
                   OfflineRegionMetadata);
 
-    const int64_t id;
-    const OfflineRegionDefinition definition;
-    const OfflineRegionMetadata metadata;
+    int64_t id;
+    OfflineRegionDefinition definition;
+    OfflineRegionMetadata metadata;
 };
+
+using OfflineRegions = std::vector<OfflineRegion>;
 
 } // namespace mbgl

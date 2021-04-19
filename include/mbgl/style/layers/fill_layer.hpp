@@ -1,3 +1,5 @@
+// clang-format off
+
 // This file is generated. Do not edit.
 
 #pragma once
@@ -5,8 +7,6 @@
 #include <mbgl/style/layer.hpp>
 #include <mbgl/style/filter.hpp>
 #include <mbgl/style/property_value.hpp>
-#include <mbgl/style/data_driven_property_value.hpp>
-
 #include <mbgl/util/color.hpp>
 
 namespace mbgl {
@@ -14,69 +14,60 @@ namespace style {
 
 class TransitionOptions;
 
-class FillLayer : public Layer {
+class FillLayer final : public Layer {
 public:
     FillLayer(const std::string& layerID, const std::string& sourceID);
-    ~FillLayer() final;
+    ~FillLayer() override;
 
-    // Source
-    const std::string& getSourceID() const;
-    const std::string& getSourceLayer() const;
-    void setSourceLayer(const std::string& sourceLayer);
+    // Layout properties
 
-    void setFilter(const Filter&);
-    const Filter& getFilter() const;
-
-    // Visibility
-    void setVisibility(VisibilityType) final;
-
-    // Zoom range
-    void setMinZoom(float) final;
-    void setMaxZoom(float) final;
+    static PropertyValue<float> getDefaultFillSortKey();
+    const PropertyValue<float>& getFillSortKey() const;
+    void setFillSortKey(const PropertyValue<float>&);
 
     // Paint properties
 
     static PropertyValue<bool> getDefaultFillAntialias();
-    PropertyValue<bool> getFillAntialias() const;
-    void setFillAntialias(PropertyValue<bool>);
+    const PropertyValue<bool>& getFillAntialias() const;
+    void setFillAntialias(const PropertyValue<bool>&);
     void setFillAntialiasTransition(const TransitionOptions&);
     TransitionOptions getFillAntialiasTransition() const;
 
-    static DataDrivenPropertyValue<float> getDefaultFillOpacity();
-    DataDrivenPropertyValue<float> getFillOpacity() const;
-    void setFillOpacity(DataDrivenPropertyValue<float>);
-    void setFillOpacityTransition(const TransitionOptions&);
-    TransitionOptions getFillOpacityTransition() const;
-
-    static DataDrivenPropertyValue<Color> getDefaultFillColor();
-    DataDrivenPropertyValue<Color> getFillColor() const;
-    void setFillColor(DataDrivenPropertyValue<Color>);
+    static PropertyValue<Color> getDefaultFillColor();
+    const PropertyValue<Color>& getFillColor() const;
+    void setFillColor(const PropertyValue<Color>&);
     void setFillColorTransition(const TransitionOptions&);
     TransitionOptions getFillColorTransition() const;
 
-    static DataDrivenPropertyValue<Color> getDefaultFillOutlineColor();
-    DataDrivenPropertyValue<Color> getFillOutlineColor() const;
-    void setFillOutlineColor(DataDrivenPropertyValue<Color>);
+    static PropertyValue<float> getDefaultFillOpacity();
+    const PropertyValue<float>& getFillOpacity() const;
+    void setFillOpacity(const PropertyValue<float>&);
+    void setFillOpacityTransition(const TransitionOptions&);
+    TransitionOptions getFillOpacityTransition() const;
+
+    static PropertyValue<Color> getDefaultFillOutlineColor();
+    const PropertyValue<Color>& getFillOutlineColor() const;
+    void setFillOutlineColor(const PropertyValue<Color>&);
     void setFillOutlineColorTransition(const TransitionOptions&);
     TransitionOptions getFillOutlineColorTransition() const;
 
+    static PropertyValue<expression::Image> getDefaultFillPattern();
+    const PropertyValue<expression::Image>& getFillPattern() const;
+    void setFillPattern(const PropertyValue<expression::Image>&);
+    void setFillPatternTransition(const TransitionOptions&);
+    TransitionOptions getFillPatternTransition() const;
+
     static PropertyValue<std::array<float, 2>> getDefaultFillTranslate();
-    PropertyValue<std::array<float, 2>> getFillTranslate() const;
-    void setFillTranslate(PropertyValue<std::array<float, 2>>);
+    const PropertyValue<std::array<float, 2>>& getFillTranslate() const;
+    void setFillTranslate(const PropertyValue<std::array<float, 2>>&);
     void setFillTranslateTransition(const TransitionOptions&);
     TransitionOptions getFillTranslateTransition() const;
 
     static PropertyValue<TranslateAnchorType> getDefaultFillTranslateAnchor();
-    PropertyValue<TranslateAnchorType> getFillTranslateAnchor() const;
-    void setFillTranslateAnchor(PropertyValue<TranslateAnchorType>);
+    const PropertyValue<TranslateAnchorType>& getFillTranslateAnchor() const;
+    void setFillTranslateAnchor(const PropertyValue<TranslateAnchorType>&);
     void setFillTranslateAnchorTransition(const TransitionOptions&);
     TransitionOptions getFillTranslateAnchorTransition() const;
-
-    static PropertyValue<std::string> getDefaultFillPattern();
-    PropertyValue<std::string> getFillPattern() const;
-    void setFillPattern(PropertyValue<std::string>);
-    void setFillPatternTransition(const TransitionOptions&);
-    TransitionOptions getFillPatternTransition() const;
 
     // Private implementation
 
@@ -86,12 +77,18 @@ public:
     Mutable<Impl> mutableImpl() const;
     FillLayer(Immutable<Impl>);
     std::unique_ptr<Layer> cloneRef(const std::string& id) const final;
-};
 
-template <>
-inline bool Layer::is<FillLayer>() const {
-    return getType() == LayerType::Fill;
-}
+protected:
+    // Dynamic properties
+    optional<conversion::Error> setPropertyInternal(const std::string& name, const conversion::Convertible& value) final;
+
+    StyleProperty getProperty(const std::string& name) const final;
+    Value serialize() const final;
+
+    Mutable<Layer::Impl> mutableBaseImpl() const final;
+};
 
 } // namespace style
 } // namespace mbgl
+
+// clang-format on

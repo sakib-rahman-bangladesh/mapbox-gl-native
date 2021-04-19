@@ -25,15 +25,11 @@ RunLoop::RunLoop(Type)
 }
 
 RunLoop::~RunLoop() {
-    assert(Scheduler::GetCurrent());
     Scheduler::SetCurrent(nullptr);
 }
 
-void RunLoop::push(std::shared_ptr<WorkTask> task) {
-    withMutex([&] {
-        queue.push(std::move(task));
-        impl->async->send();
-    });
+void RunLoop::wake() {
+    impl->async->send();
 }
 
 void RunLoop::run() {
@@ -41,6 +37,7 @@ void RunLoop::run() {
 }
 
 void RunLoop::runOnce() {
+    wake();
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, false);
 }
 

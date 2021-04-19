@@ -1,14 +1,16 @@
 #pragma once
 
+#include <mbgl/style/expression/parsing_context.hpp>
+#include <mbgl/style/expression/type.hpp>
+#include <mbgl/style/expression/value.hpp>
+#include <mbgl/tile/tile_id.hpp>
+#include <mbgl/util/color.hpp>
+#include <mbgl/util/optional.hpp>
+#include <mbgl/util/variant.hpp>
+
 #include <array>
 #include <vector>
 #include <memory>
-#include <mbgl/util/optional.hpp>
-#include <mbgl/util/variant.hpp>
-#include <mbgl/util/color.hpp>
-#include <mbgl/style/expression/type.hpp>
-#include <mbgl/style/expression/value.hpp>
-#include <mbgl/style/expression/parsing_context.hpp>
 
 namespace mbgl {
 
@@ -24,21 +26,51 @@ public:
 
 class EvaluationContext {
 public:
-    EvaluationContext(float zoom_) : zoom(zoom_), feature(nullptr) {}
-    EvaluationContext(GeometryTileFeature const * feature_) : zoom(optional<float>()), feature(feature_) {}
-    EvaluationContext(float zoom_, GeometryTileFeature const * feature_) :
-        zoom(zoom_), feature(feature_)
+    EvaluationContext() = default;
+    explicit EvaluationContext(float zoom_) : zoom(zoom_) {}
+    explicit EvaluationContext(GeometryTileFeature const * feature_) : feature(feature_) {}
+    EvaluationContext(float zoom_, GeometryTileFeature const* feature_) : zoom(zoom_), feature(feature_) {}
+    EvaluationContext(optional<mbgl::Value> accumulated_, GeometryTileFeature const * feature_) :
+        accumulated(std::move(accumulated_)), feature(feature_)
     {}
-    EvaluationContext(optional<float> zoom_, GeometryTileFeature const * feature_, optional<double> heatmapDensity_) :
-        zoom(std::move(zoom_)), feature(feature_), heatmapDensity(std::move(heatmapDensity_))
+    EvaluationContext(float zoom_, GeometryTileFeature const* feature_, const FeatureState* state_)
+        : zoom(zoom_), feature(feature_), featureState(state_) {}
+    EvaluationContext(optional<float> zoom_, GeometryTileFeature const * feature_, optional<double> colorRampParameter_) :
+        zoom(std::move(zoom_)), feature(feature_), colorRampParameter(std::move(colorRampParameter_))
     {}
-    
+
+    EvaluationContext& withFormattedSection(const Value* formattedSection_) noexcept {
+        formattedSection = formattedSection_;
+        return *this;
+    };
+
+    EvaluationContext& withFeatureState(const FeatureState* featureState_) noexcept {
+        featureState = featureState_;
+        return *this;
+    };
+
+    EvaluationContext& withAvailableImages(const std::set<std::string>* availableImages_) noexcept {
+        availableImages = availableImages_;
+        return *this;
+    };
+
+    EvaluationContext& withCanonicalTileID(const mbgl::CanonicalTileID* canonical_) noexcept {
+        canonical = canonical_;
+        return *this;
+    };
+
     optional<float> zoom;
-    GeometryTileFeature const * feature;
-    optional<double> heatmapDensity;
+    optional<mbgl::Value> accumulated;
+    GeometryTileFeature const* feature = nullptr;
+    optional<double> colorRampParameter;
+    // Contains formatted section object, std::unordered_map<std::string, Value>.
+    const Value* formattedSection = nullptr;
+    const FeatureState* featureState = nullptr;
+    const std::set<std::string>* availableImages = nullptr;
+    const mbgl::CanonicalTileID* canonical = nullptr;
 };
 
-template<typename T>
+template <typename T>
 class Result : private variant<EvaluationError, T> {
 public:
     using variant<EvaluationError, T>::variant;
@@ -112,9 +144,38 @@ public:
     ParseResult ExpressionClass::parse(const V&, ParsingContext),
     which handles parsing a style-spec JSON representation of the expression.
 */
+
+enum class Kind : int32_t {
+    Coalesce,
+    CompoundExpression,
+    Literal,
+    At,
+    Interpolate,
+    Assertion,
+    Length,
+    Step,
+    Let,
+    Var,
+    CollatorExpression,
+    Coercion,
+    Match,
+    Error,
+    Case,
+    Any,
+    All,
+    Comparison,
+    FormatExpression,
+    FormatSectionOverride,
+    NumberFormat,
+    ImageExpression,
+    In,
+    Within,
+    Distance
+};
+
 class Expression {
 public:
-    Expression(type::Type type_) : type(std::move(type_)) {}
+    Expression(Kind kind_, type::Type type_) : kind(kind_), type(std::move(type_)) {}
     virtual ~Expression() = default;
     
     virtual EvaluationResult evaluate(const EvaluationContext& params) const = 0;
@@ -124,9 +185,38 @@ public:
         return !operator==(rhs);
     }
 
+    Kind getKind() const { return kind; };
     type::Type getType() const { return type; };
+
+    EvaluationResult evaluate(optional<float> zoom, const Feature& feature, optional<double> colorRampParameter) const;
+    EvaluationResult evaluate(optional<float> zoom,
+                              const Feature& feature,
+                              optional<double> colorRampParameter,
+                              const std::set<std::string>& availableImages) const;
+    EvaluationResult evaluate(optional<float> zoom,
+                              const Feature& feature,
+                              optional<double> colorRampParameter,
+                              const std::set<std::string>& availableImages,
+                              const CanonicalTileID& canonical) const;
+    EvaluationResult evaluate(optional<mbgl::Value> accumulated, const Feature& feature) const;
+
+    /**
+     * Statically analyze the expression, attempting to enumerate possible outputs. Returns
+     * an array of values plus the sentinel null optional value, used to indicate that the
+     * complete set of outputs is statically undecidable.
+     */
+    virtual std::vector<optional<Value>> possibleOutputs() const = 0;
     
-    EvaluationResult evaluate(optional<float> zoom, const Feature& feature, optional<double> heatmapDensity) const;
+    virtual mbgl::Value serialize() const {
+        std::vector<mbgl::Value> serialized;
+        serialized.emplace_back(getOperator());
+        eachChild([&](const Expression &child) {
+            serialized.emplace_back(child.serialize());
+        });
+        return serialized;
+    };
+    
+    virtual std::string getOperator() const = 0;
 
 protected:
     template <typename T>
@@ -161,10 +251,9 @@ protected:
                            const std::pair<std::unique_ptr<Expression>, std::unique_ptr<Expression>>& rhs) {
         return *(lhs.first) == *(rhs.first) && *(lhs.second) == *(rhs.second);
     }
-    
-    
 
 private:
+    Kind kind;
     type::Type type;
 };
 

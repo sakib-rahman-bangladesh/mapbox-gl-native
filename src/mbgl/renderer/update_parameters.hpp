@@ -11,9 +11,12 @@
 
 #include <vector>
 
+#include <mapbox/std/weak.hpp>
+
 namespace mbgl {
 
 class AnnotationManager;
+class FileSource;
 
 class UpdateParameters {
 public:
@@ -32,12 +35,15 @@ public:
     const Immutable<std::vector<Immutable<style::Source::Impl>>> sources;
     const Immutable<std::vector<Immutable<style::Layer::Impl>>> layers;
 
-    AnnotationManager& annotationManager;
+    mapbox::base::WeakPtr<AnnotationManager> annotationManager;
+    std::shared_ptr<FileSource> fileSource;
 
     const uint8_t prefetchZoomDelta;
     
     // For still image requests, render requested
     const bool stillImageRequest;
+
+    const bool crossSourceCollisions;
 };
 
 } // namespace mbgl

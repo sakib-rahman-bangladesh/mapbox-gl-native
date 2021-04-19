@@ -2,93 +2,58 @@
 #include <mbgl/renderer/render_tile.hpp>
 #include <mbgl/tile/raster_tile.hpp>
 #include <mbgl/algorithm/update_tile_masks.hpp>
+#include <mbgl/renderer/tile_parameters.hpp>
 
 namespace mbgl {
 
 using namespace style;
 
 RenderRasterSource::RenderRasterSource(Immutable<style::RasterSource::Impl> impl_)
-    : RenderSource(impl_) {
-    tilePyramid.setObserver(this);
+    : RenderTileSetSource(std::move(impl_)) {
 }
 
-const style::RasterSource::Impl& RenderRasterSource::impl() const {
+inline const style::RasterSource::Impl& RenderRasterSource::impl() const {
     return static_cast<const style::RasterSource::Impl&>(*baseImpl);
 }
 
-bool RenderRasterSource::isLoaded() const {
-    return tilePyramid.isLoaded();
+const optional<Tileset>& RenderRasterSource::getTileset() const {
+    return impl().tileset;
 }
 
-void RenderRasterSource::update(Immutable<style::Source::Impl> baseImpl_,
-                                const std::vector<Immutable<Layer::Impl>>& layers,
-                                const bool needsRendering,
-                                const bool needsRelayout,
-                                const TileParameters& parameters) {
-    std::swap(baseImpl, baseImpl_);
-
-    enabled = needsRendering;
-
-    optional<Tileset> tileset = impl().getTileset();
-
-    if (!tileset) {
-        return;
-    }
-
-    if (tileURLTemplates != tileset->tiles) {
-        tileURLTemplates = tileset->tiles;
-
-        // TODO: this removes existing buckets, and will cause flickering.
-        // Should instead refresh tile data in place.
-        tilePyramid.tiles.clear();
-        tilePyramid.renderTiles.clear();
-        tilePyramid.cache.clear();
-    }
-
-    tilePyramid.update(layers,
-                       needsRendering,
-                       needsRelayout,
-                       parameters,
-                       SourceType::Raster,
-                       impl().getTileSize(),
-                       tileset->zoomRange,
-                       [&] (const OverscaledTileID& tileID) {
-                           return std::make_unique<RasterTile>(tileID, parameters, *tileset);
-                       });
+void RenderRasterSource::updateInternal(const Tileset& tileset,
+                                        const std::vector<Immutable<LayerProperties>>& layers,
+                                        const bool needsRendering,
+                                        const bool needsRelayout,
+                                        const TileParameters& parameters) {
+    tilePyramid.update(
+        layers,
+        needsRendering,
+        needsRelayout,
+        parameters,
+        *baseImpl,
+        impl().getTileSize(),
+        tileset.zoomRange,
+        tileset.bounds,
+        [&](const OverscaledTileID& tileID) { return std::make_unique<RasterTile>(tileID, parameters, tileset); });
+    algorithm::updateTileMasks(tilePyramid.getRenderedTiles());
 }
 
-void RenderRasterSource::startRender(PaintParameters& parameters) {
-    algorithm::updateTileMasks(tilePyramid.getRenderTiles());
-    tilePyramid.startRender(parameters);
-}
-
-void RenderRasterSource::finishRender(PaintParameters& parameters) {
-    tilePyramid.finishRender(parameters);
-}
-
-std::vector<std::reference_wrapper<RenderTile>> RenderRasterSource::getRenderTiles() {
-    return tilePyramid.getRenderTiles();
+void RenderRasterSource::prepare(const SourcePrepareParameters& parameters) {
+    RenderTileSource::prepare(parameters);
 }
 
 std::unordered_map<std::string, std::vector<Feature>>
 RenderRasterSource::queryRenderedFeatures(const ScreenLineString&,
                                           const TransformState&,
-                                          const std::vector<const RenderLayer*>&,
+                                          const std::unordered_map<std::string, const RenderLayer*>&,
                                           const RenderedQueryOptions&,
-                                          const CollisionIndex& ) const {
-    return std::unordered_map<std::string, std::vector<Feature>> {};
+                                          const mat4&) const {
+    return std::unordered_map<std::string, std::vector<Feature>>{};
 }
 
 std::vector<Feature> RenderRasterSource::querySourceFeatures(const SourceQueryOptions&) const {
     return {};
 }
 
-void RenderRasterSource::onLowMemory() {
-    tilePyramid.onLowMemory();
-}
-
-void RenderRasterSource::dumpDebugLogs() const {
-    tilePyramid.dumpDebugLogs();
-}
 
 } // namespace mbgl

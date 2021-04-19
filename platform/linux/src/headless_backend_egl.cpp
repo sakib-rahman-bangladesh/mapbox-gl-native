@@ -1,5 +1,6 @@
 #include <mbgl/gl/headless_backend.hpp>
 
+#include <mbgl/util/string.hpp>
 #include <mbgl/util/logging.hpp>
 
 #include <EGL/egl.h>
@@ -7,6 +8,7 @@
 #include <cassert>
 
 namespace mbgl {
+namespace gl {
 
 // This class provides a singleton that contains information about the configuration used for
 // instantiating new headless rendering contexts.
@@ -98,7 +100,7 @@ public:
 
         eglSurface = eglCreatePbufferSurface(eglDisplay->display, eglDisplay->config, surfAttribs);
         if (eglSurface == EGL_NO_SURFACE) {
-            throw std::runtime_error("Could not create surface: " + std::to_string(eglGetError()));
+            throw std::runtime_error("Could not create surface: " + util::toString(eglGetError()));
         }
     }
 
@@ -141,4 +143,5 @@ void HeadlessBackend::createImpl() {
     impl = std::make_unique<EGLBackendImpl>();
 }
 
+} // namespace gl
 } // namespace mbgl

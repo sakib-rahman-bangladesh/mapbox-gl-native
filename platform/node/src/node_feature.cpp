@@ -14,6 +14,10 @@ using Properties = mbgl::PropertyMap;
 template <class T>
 struct ToType {
 public:
+    v8::Local<v8::String> operator()(const empty&) {
+        return type("Empty");
+    }
+
     v8::Local<v8::String> operator()(const point<T>&) {
         return type("Point");
     }
@@ -43,9 +47,9 @@ public:
     }
 
 private:
-    v8::Local<v8::String> type(const char* type) {
+    v8::Local<v8::String> type(const char* type_) {
         Nan::EscapableHandleScope scope;
-        return scope.Escape(Nan::New(type).ToLocalChecked());
+        return scope.Escape(Nan::New(type_).ToLocalChecked());
     }
 };
 
@@ -108,7 +112,7 @@ struct ToValue {
     v8::Local<v8::Value> operator()(const std::vector<mbgl::Value>& array) {
         Nan::EscapableHandleScope scope;
         v8::Local<v8::Array> result = Nan::New<v8::Array>();
-        for (unsigned int i = 0; i < array.size(); i++) {
+        for (std::size_t i = 0; i < array.size(); i++) {
             result->Set(i, toJS(array[i]));
         }
         return scope.Escape(result);
@@ -159,9 +163,15 @@ v8::Local<v8::Object> toJS(const Feature& feature) {
     Nan::Set(result, Nan::New("geometry").ToLocalChecked(), toJS(feature.geometry));
     Nan::Set(result, Nan::New("properties").ToLocalChecked(), toJS(feature.properties));
 
-    if (feature.id) {
-        Nan::Set(result, Nan::New("id").ToLocalChecked(), FeatureIdentifier::visit(*feature.id, ToValue()));
+    if (!feature.id.is<mbgl::NullValue>()) {
+        Nan::Set(result, Nan::New("id").ToLocalChecked(), FeatureIdentifier::visit(feature.id, ToValue()));
     }
+
+    Nan::Set(result, Nan::New("source").ToLocalChecked(), toJS(feature.source));
+    if (!feature.sourceLayer.empty()) {
+        Nan::Set(result, Nan::New("sourceLayer").ToLocalChecked(), toJS(feature.sourceLayer));
+    }
+    Nan::Set(result, Nan::New("state").ToLocalChecked(), toJS(feature.state));
 
     return scope.Escape(result);
 }

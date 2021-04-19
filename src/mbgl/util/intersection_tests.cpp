@@ -30,7 +30,7 @@ bool pointIntersectsBufferedLine(const GeometryCoordinate& p, const GeometryCoor
     const float radiusSquared = radius * radius;
 
     if (line.size() == 1) return util::distSqr<float>(p, line.at(0)) < radiusSquared;
-    if (line.size() == 0) return false;
+    if (line.empty()) return false;
 
     for (auto i = line.begin() + 1; i != line.end(); i++) {
         // Find line segments that have a distance <= radius^2 to p
@@ -52,7 +52,7 @@ bool lineSegmentIntersectsLineSegment(const GeometryCoordinate& a0, const Geomet
         isCounterClockwise(a0, a1, b0) != isCounterClockwise(a0, a1, b1);
 }
 bool lineIntersectsLine(const GeometryCoordinates& lineA, const GeometryCoordinates& lineB) {
-    if (lineA.size() == 0 || lineB.size() == 0) return false;
+    if (lineA.empty() || lineB.empty()) return false;
     for (auto i = lineA.begin(); i != lineA.end() - 1; i++) {
         auto& a0 = *i;
         auto& a1 = *(i + 1);
@@ -82,11 +82,16 @@ bool lineIntersectsBufferedLine(const GeometryCoordinates& lineA, const Geometry
     return false;
 }
 
+bool polygonIntersectsBufferedPoint(const GeometryCoordinates& polygon, const GeometryCoordinate& point, float radius) {
+    if (polygonContainsPoint(polygon, point)) return true;
+    if (pointIntersectsBufferedLine(point, polygon, radius)) return true;
+    return false;
+}
+
 bool polygonIntersectsBufferedMultiPoint(const GeometryCoordinates& polygon, const GeometryCollection& rings, float radius) {
     for (auto& ring : rings) {
         for (auto& point : ring) {
-            if (polygonContainsPoint(polygon, point)) return true;
-            if (pointIntersectsBufferedLine(point, polygon, radius)) return true;
+            if (polygonIntersectsBufferedPoint(polygon, point, radius)) return true;
         }
     }
     return false;
@@ -115,9 +120,7 @@ bool polygonIntersectsPolygon(const GeometryCoordinates& polygonA, const Geometr
         if (polygonContainsPoint(polygonA, p)) return true;
     }
 
-    if (lineIntersectsLine(polygonA, polygonB)) return true;
-
-    return false;
+    return lineIntersectsLine(polygonA, polygonB);
 }
 
 bool polygonIntersectsMultiPolygon(const GeometryCoordinates& polygon, const GeometryCollection& multiPolygon) {

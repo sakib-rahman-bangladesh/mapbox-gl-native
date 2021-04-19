@@ -21,8 +21,8 @@ namespace mbgl {
 template <class T>
 class Mutable {
 public:
-    Mutable(Mutable&&) = default;
-    Mutable& operator=(Mutable&&) = default;
+    Mutable(Mutable&&) noexcept = default;
+    Mutable& operator=(Mutable&&) noexcept = default;
 
     Mutable(const Mutable&) = delete;
     Mutable& operator=(const Mutable&) = delete;
@@ -38,12 +38,20 @@ private:
     std::shared_ptr<T> ptr;
 
     template <class S> friend class Immutable;
+    // NOLINTNEXTLINE(readability-redundant-declaration)
     template <class S, class... Args> friend Mutable<S> makeMutable(Args&&...);
+    // NOLINTNEXTLINE(readability-redundant-declaration)
+    template <class S, class U> friend Mutable<S> staticMutableCast(const Mutable<U>&);
 };
 
 template <class T, class... Args>
 Mutable<T> makeMutable(Args&&... args) {
     return Mutable<T>(std::make_shared<T>(std::forward<Args>(args)...));
+}
+
+template <class S, class U>
+Mutable<S> staticMutableCast(const Mutable<U>& u) {
+    return Mutable<S>(std::static_pointer_cast<S>(u.ptr));
 }
 
 /**
@@ -63,12 +71,11 @@ public:
         : ptr(std::const_pointer_cast<const S>(std::move(s.ptr))) {}
 
     template <class S>
-    Immutable(Immutable<S>&& s)
+    Immutable(Immutable<S> s)
         : ptr(std::move(s.ptr)) {}
 
-    template <class S>
-    Immutable(const Immutable<S>& s)
-        : ptr(s.ptr) {}
+    Immutable(Immutable&&) noexcept = default;
+    Immutable(const Immutable&) = default;
 
     template <class S>
     Immutable& operator=(Mutable<S>&& s) {
@@ -76,17 +83,8 @@ public:
         return *this;
     }
 
-    template <class S>
-    Immutable& operator=(Immutable<S>&& s) {
-        ptr = std::move(s.ptr);
-        return *this;
-    }
-
-    template <class S>
-    Immutable& operator=(const Immutable<S>& s) {
-        ptr = s.ptr;
-        return *this;
-    }
+    Immutable& operator=(Immutable&&) noexcept = default;
+    Immutable& operator=(const Immutable&) = default;
 
     const T* get() const { return ptr.get(); }
     const T* operator->() const { return ptr.get(); }
@@ -107,6 +105,8 @@ private:
     std::shared_ptr<const T> ptr;
 
     template <class S> friend class Immutable;
+
+    // NOLINTNEXTLINE(readability-redundant-declaration)
     template <class S, class U> friend Immutable<S> staticImmutableCast(const Immutable<U>&);
 };
 
